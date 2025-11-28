@@ -212,9 +212,9 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-	}
+	// if len(tradingCoins) == 0 {
+	// 	tradingCoins = defaultCoins
+	// }
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string
@@ -326,9 +326,9 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-	}
+	// if len(tradingCoins) == 0 {
+	// 	tradingCoins = defaultCoins
+	// }
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string
@@ -1056,9 +1056,9 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-	}
+	// if len(tradingCoins) == 0 {
+	// 	tradingCoins = defaultCoins
+	// }
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string
