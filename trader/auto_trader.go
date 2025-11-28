@@ -1458,124 +1458,173 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 }
 
 // getCandidateCoins 获取交易员的候选币种列表
+// func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
+// 	// 如果用户配置了自定义交易币种，优先使用自定义列表
+// 	if len(at.tradingCoins) > 0 {
+// 		var candidateCoins []decision.CandidateCoin
+// 		for _, coin := range at.tradingCoins {
+// 			symbol := normalizeSymbol(coin)
+// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+// 				Symbol:  symbol,
+// 				Sources: []string{"custom"},
+// 			})
+// 		}
+
+// 		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",
+// 			at.name, len(candidateCoins), at.tradingCoins)
+// 		return candidateCoins, nil
+// 	}
+
+// 	// =====================
+// 	// 下面是「无自定义币种」的情况：
+// 	// 用：默认币种 ∪ (AI500 + OI Top)
+// 	// =====================
+
+// 	const ai500Limit = 20
+
+// 	// 先尝试获取合并币种池（AI500 + OI Top）
+// 	var mergedPool *pool.MergedCoinPool
+// 	var err error
+// 	mergedPool, err = pool.GetMergedCoinPool(ai500Limit)
+// 	if err != nil {
+// 		log.Printf("⚠️ [%s] 获取合并币种池失败: %v", at.name, err)
+// 		// 出错时 mergedPool 就当 nil，用不到就算了
+// 	}
+
+// 	// 建一个 symbol -> sources 的 map，方便后面合并来源
+// 	symbolSources := make(map[string][]string)
+// 	if mergedPool != nil {
+// 		for sym, srcs := range mergedPool.SymbolSources {
+// 			normSym := normalizeSymbol(sym)
+// 			symbolSources[normSym] = append([]string{}, srcs...)
+// 		}
+// 	}
+
+// 	var candidateCoins []decision.CandidateCoin
+// 	symbolSet := make(map[string]bool)
+
+// 	// 1️⃣ 先放数据库配置的默认币种
+// 	if len(at.defaultCoins) > 0 {
+// 		for _, coin := range at.defaultCoins {
+// 			symbol := normalizeSymbol(coin)
+// 			symbolSet[symbol] = true
+
+// 			sources := symbolSources[symbol]
+// 			if len(sources) == 0 {
+// 				sources = []string{"default"}
+// 			} else {
+// 				// 把 "default" 也标记进去（去重）
+// 				hasDefault := false
+// 				for _, s := range sources {
+// 					if s == "default" {
+// 						hasDefault = true
+// 						break
+// 					}
+// 				}
+// 				if !hasDefault {
+// 					sources = append(sources, "default")
+// 				}
+// 			}
+
+// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+// 				Symbol:  symbol,
+// 				Sources: sources,
+// 			})
+// 		}
+// 	}
+
+// 	// 2️⃣ 再把合并池里剩下的（AI500 / OI Top 专属）补进来
+// 	if mergedPool != nil {
+// 		for _, symbol := range mergedPool.AllSymbols {
+// 			symbol = normalizeSymbol(symbol)
+// 			if symbolSet[symbol] {
+// 				continue // 已在默认币种中
+// 			}
+// 			symbolSet[symbol] = true
+
+// 			sources := symbolSources[symbol]
+// 			if len(sources) == 0 {
+// 				sources = []string{"ai500"} // 理论上不会，但兜底
+// 			}
+
+// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+// 				Symbol:  symbol,
+// 				Sources: sources,
+// 			})
+// 		}
+// 	}
+
+// 	// 3️⃣ 如果既没有默认币种又 mergedPool 失败，就兜底用硬编码的默认币种池
+// 	if len(candidateCoins) == 0 {
+// 		log.Printf("⚠️ [%s] 数据库无默认币种且合并币种池不可用，使用硬编码默认币种池", at.name)
+// 		fallback := []string{"BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"}
+// 		for _, s := range fallback {
+// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+// 				Symbol:  normalizeSymbol(s),
+// 				Sources: []string{"fallback"},
+// 			})
+// 		}
+// 	}
+
+// 	log.Printf("📋 [%s] 候选币种汇总: 默认=%d, 合并池额外=%d, 总计=%d个币种",
+// 		at.name,
+// 		len(at.defaultCoins),
+// 		len(candidateCoins)-len(at.defaultCoins),
+// 		len(candidateCoins),
+// 	)
+
+// 	return candidateCoins, nil
+// }
+
+// getCandidateCoins returns the list of candidate coins for the trader, prioritizing user-configured coins or falling back to OI Top symbols.
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-	// 如果用户配置了自定义交易币种，优先使用自定义列表
-	if len(at.tradingCoins) > 0 {
-		var candidateCoins []decision.CandidateCoin
-		for _, coin := range at.tradingCoins {
-			symbol := normalizeSymbol(coin)
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  symbol,
-				Sources: []string{"custom"},
-			})
-		}
 
-		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",
-			at.name, len(candidateCoins), at.tradingCoins)
-		return candidateCoins, nil
-	}
+    // ================================
+    // ① 用户手动配置了交易币种 → 直接使用
+    // ================================
+    if len(at.tradingCoins) > 0 {
+        var out []decision.CandidateCoin
+        for _, c := range at.tradingCoins {
+            symbol := normalizeSymbol(c)
+            out = append(out, decision.CandidateCoin{
+                Symbol:  symbol,
+                Sources: []string{"custom"},
+            })
+        }
 
-	// =====================
-	// 下面是「无自定义币种」的情况：
-	// 用：默认币种 ∪ (AI500 + OI Top)
-	// =====================
+        log.Printf("📋 [%s] 使用自定义币种: %d 个 %v",
+            at.name, len(out), at.tradingCoins)
 
-	const ai500Limit = 20
+        return out, nil
+    }
 
-	// 先尝试获取合并币种池（AI500 + OI Top）
-	var mergedPool *pool.MergedCoinPool
-	var err error
-	mergedPool, err = pool.GetMergedCoinPool(ai500Limit)
-	if err != nil {
-		log.Printf("⚠️ [%s] 获取合并币种池失败: %v", at.name, err)
-		// 出错时 mergedPool 就当 nil，用不到就算了
-	}
+    // ================================
+    // ② 未配置交易币种 → 专用 OI Top 模式
+    // ================================
+    oiSymbols, err := pool.GetOITopSymbols()
+    if err != nil {
+        return nil, fmt.Errorf("获取 OI Top 失败: %w", err)
+    }
 
-	// 建一个 symbol -> sources 的 map，方便后面合并来源
-	symbolSources := make(map[string][]string)
-	if mergedPool != nil {
-		for sym, srcs := range mergedPool.SymbolSources {
-			normSym := normalizeSymbol(sym)
-			symbolSources[normSym] = append([]string{}, srcs...)
-		}
-	}
+    if len(oiSymbols) == 0 {
+        log.Printf("⚠️ [%s] 无自定义币且 OI Top 无数据 → 候选币为空", at.name)
+        return []decision.CandidateCoin{}, nil
+    }
 
-	var candidateCoins []decision.CandidateCoin
-	symbolSet := make(map[string]bool)
+    var out []decision.CandidateCoin
+    for _, sym := range oiSymbols {
+        symbol := normalizeSymbol(sym)
+        out = append(out, decision.CandidateCoin{
+            Symbol:  symbol,
+            Sources: []string{"oi_top"},
+        })
+    }
 
-	// 1️⃣ 先放数据库配置的默认币种
-	if len(at.defaultCoins) > 0 {
-		for _, coin := range at.defaultCoins {
-			symbol := normalizeSymbol(coin)
-			symbolSet[symbol] = true
+    log.Printf("📌 [%s] 使用 OI Top 作为候选池: %d 个币 %v",
+        at.name, len(out), oiSymbols)
 
-			sources := symbolSources[symbol]
-			if len(sources) == 0 {
-				sources = []string{"default"}
-			} else {
-				// 把 "default" 也标记进去（去重）
-				hasDefault := false
-				for _, s := range sources {
-					if s == "default" {
-						hasDefault = true
-						break
-					}
-				}
-				if !hasDefault {
-					sources = append(sources, "default")
-				}
-			}
-
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  symbol,
-				Sources: sources,
-			})
-		}
-	}
-
-	// 2️⃣ 再把合并池里剩下的（AI500 / OI Top 专属）补进来
-	if mergedPool != nil {
-		for _, symbol := range mergedPool.AllSymbols {
-			symbol = normalizeSymbol(symbol)
-			if symbolSet[symbol] {
-				continue // 已在默认币种中
-			}
-			symbolSet[symbol] = true
-
-			sources := symbolSources[symbol]
-			if len(sources) == 0 {
-				sources = []string{"ai500"} // 理论上不会，但兜底
-			}
-
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  symbol,
-				Sources: sources,
-			})
-		}
-	}
-
-	// 3️⃣ 如果既没有默认币种又 mergedPool 失败，就兜底用硬编码的默认币种池
-	if len(candidateCoins) == 0 {
-		log.Printf("⚠️ [%s] 数据库无默认币种且合并币种池不可用，使用硬编码默认币种池", at.name)
-		fallback := []string{"BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"}
-		for _, s := range fallback {
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  normalizeSymbol(s),
-				Sources: []string{"fallback"},
-			})
-		}
-	}
-
-	log.Printf("📋 [%s] 候选币种汇总: 默认=%d, 合并池额外=%d, 总计=%d个币种",
-		at.name,
-		len(at.defaultCoins),
-		len(candidateCoins)-len(at.defaultCoins),
-		len(candidateCoins),
-	)
-
-	return candidateCoins, nil
+    return out, nil
 }
-
 
 // normalizeSymbol 标准化币种符号（确保以USDT结尾）
 func normalizeSymbol(symbol string) string {
