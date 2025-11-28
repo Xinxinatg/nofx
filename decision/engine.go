@@ -319,9 +319,41 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 		} else {
 			sb.WriteString(template.Content)
 			sb.WriteString("\n\n")
+			sb.WriteString("# 📈 OI + 价格联动策略（非常重要）\n\n")
+			sb.WriteString("当你看到候选币种中包含 OI 和价格的方向性提示时，请严格按照下面的规则做偏好决策：\n\n")
+			sb.WriteString("1. **OI↑ & 价格↑（持仓量增加 + 价格上涨）**：\n")
+			sb.WriteString("   - 视为趋势多头强化，优先考虑多头方向的机会（open_long）。\n")
+			sb.WriteString("   - 在没有明显反转信号前，**避免主动开空**，如需做空必须给出非常充分的理由。\n\n")
+			sb.WriteString("2. **OI↓ & 价格↓（持仓量减少 + 价格下跌）**：\n")
+			sb.WriteString("   - 视为空头趋势或资金撤退，优先考虑空头方向的机会（open_short）。\n")
+			sb.WriteString("   - 在没有明显反弹结构前，**避免主动开多**。\n\n")
+			sb.WriteString("3. **OI↑ & 价格↓**：\n")
+			sb.WriteString("   - 视为可能的诱空或资金反向布局，优先等待结构明朗，不要冲动开仓。\n\n")
+			sb.WriteString("4. **OI↓ & 价格↑**：\n")
+			sb.WriteString("   - 视为多头减仓或逼空尾声，高度警惕追多风险，更倾向于等待或寻找做空机会，但必须结合其他技术信号确认。\n\n")
+			sb.WriteString("在给出 `action` 时，请结合上面的 OI+价格规则：\n")
+			sb.WriteString("- 对于带有“倾向做多”标签的币种，如果你选择 `open_short`，必须在 `reasoning` 中明确解释为何逆势操作。\n")
+			sb.WriteString("- 对于带有“倾向做空”标签的币种，如果你选择 `open_long`，也必须给出清晰的反转依据。\n")
+			sb.WriteString("\n\n")
 		}
 	} else {
 		sb.WriteString(template.Content)
+		sb.WriteString("\n\n")
+		sb.WriteString("# 📈 OI + 价格联动策略（非常重要）\n\n")
+		sb.WriteString("当你看到候选币种中包含 OI 和价格的方向性提示时，请严格按照下面的规则做偏好决策：\n\n")
+		sb.WriteString("1. **OI↑ & 价格↑（持仓量增加 + 价格上涨）**：\n")
+		sb.WriteString("   - 视为趋势多头强化，优先考虑多头方向的机会（open_long）。\n")
+		sb.WriteString("   - 在没有明显反转信号前，**避免主动开空**，如需做空必须给出非常充分的理由。\n\n")
+		sb.WriteString("2. **OI↓ & 价格↓（持仓量减少 + 价格下跌）**：\n")
+		sb.WriteString("   - 视为空头趋势或资金撤退，优先考虑空头方向的机会（open_short）。\n")
+		sb.WriteString("   - 在没有明显反弹结构前，**避免主动开多**。\n\n")
+		sb.WriteString("3. **OI↑ & 价格↓**：\n")
+		sb.WriteString("   - 视为可能的诱空或资金反向布局，优先等待结构明朗，不要冲动开仓。\n\n")
+		sb.WriteString("4. **OI↓ & 价格↑**：\n")
+		sb.WriteString("   - 视为多头减仓或逼空尾声，高度警惕追多风险，更倾向于等待或寻找做空机会，但必须结合其他技术信号确认。\n\n")
+		sb.WriteString("在给出 `action` 时，请结合上面的 OI+价格规则：\n")
+		sb.WriteString("- 对于带有“倾向做多”标签的币种，如果你选择 `open_short`，必须在 `reasoning` 中明确解释为何逆势操作。\n")
+		sb.WriteString("- 对于带有“倾向做空”标签的币种，如果你选择 `open_long`，也必须给出清晰的反转依据。\n")
 		sb.WriteString("\n\n")
 	}
 
@@ -435,11 +467,17 @@ func buildUserPrompt(ctx *Context) string {
 		if len(coin.Sources) > 1 {
 			sourceTags = " (AI500+OI_Top双重信号)"
 		} else if len(coin.Sources) == 1 && coin.Sources[0] == "oi_top" {
-			sourceTags = " (OI_Top持仓增长)"
+			sourceTags = " (OI_Top持仓增长或者降低信号)"
 		}
 
 		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
+		// ⭐ 在这里加上 OI+价格方向信号
+		oiSignal := describeOISignal(coin.Symbol, ctx)
+		if oiSignal != "" {
+			sb.WriteString(oiSignal)
+			sb.WriteString("\n\n")
+		}
 		sb.WriteString(market.Format(marketData))
 		sb.WriteString("\n")
 	}
@@ -846,4 +884,38 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
+}
+// describeOISignal 根据 OI & 价格变化，给出简单信号标签
+func describeOISignal(symbol string, ctx *Context) string {
+    oi, ok := ctx.OITopDataMap[symbol]
+    if !ok || oi == nil {
+        return "" // 没有 OI Top 数据就不写
+    }
+
+    oiDelta := oi.OIDeltaPercent
+    priceDelta := oi.PriceDeltaPercent
+
+    // 你可以根据自己习惯调这个“明显”的阈值
+    const minAbs = 1.0 // 1% 以内就当成噪音，不强行打标签
+
+    // OI 和价格都在涨 → 倾向做多
+    if oiDelta > minAbs && priceDelta > minAbs {
+        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
+    }
+
+    // OI 和价格都在跌 → 倾向做空
+    if oiDelta < -minAbs && priceDelta < -minAbs {
+        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
+    }
+
+    // 其它组合你也可以顺便提示一下
+    if oiDelta > minAbs && priceDelta < -minAbs {
+        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
+    }
+    if oiDelta < -minAbs && priceDelta > minAbs {
+        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
+    }
+
+    // 变化不明显就不说
+    return ""
 }
