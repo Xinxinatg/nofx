@@ -1577,11 +1577,9 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 // }
 
 // getCandidateCoins returns the list of candidate coins for the trader, prioritizing user-configured coins or falling back to OI Top symbols.
-// getCandidateCoins 获取交易员的候选币种列表
-// getCandidateCoins 获取交易员的候选币种列表（OI Top 专用模式 + 持仓兜底）
+// getCandidateCoins 获取交易员的候选币种列表（OI Top 专用 + 持仓兜底）
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-
-    // 1️⃣ 如果用户配置了自定义币种 → 优先
+    // 1️⃣ 如果用户配置了自定义币种 → 优先（行为不变）
     if len(at.tradingCoins) > 0 {
         var out []decision.CandidateCoin
         for _, c := range at.tradingCoins {
@@ -1597,20 +1595,23 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
     // ================================
     // 2️⃣ OI Top 专用模式
     // ================================
-    oiTopPositions, err := pool.GetOITopPositions() // 这里不再用 mergedPool！
+    oiTopPositions, err := pool.GetOITopPositions()
     if err != nil {
         log.Printf("⚠️ [%s] 获取 OI Top 失败: %v", at.name, err)
-        oiTopPositions = []pool.OIPosition{} // 允许继续兜底
+        oiTopPositions = []pool.OIPosition{} // 允许后面继续走持仓兜底
     }
 
-    // symbol -> true
     symbolSet := make(map[string]bool)
     var candidateCoins []decision.CandidateCoin
 
-    // 加入所有 OI Top 币种
+    // 2.1 把所有 OI Top 币种加进去
     for _, p := range oiTopPositions {
         sym := normalizeSymbol(p.Symbol)
+        if symbolSet[sym] {
+            continue
+        }
         symbolSet[sym] = true
+
         candidateCoins = append(candidateCoins, decision.CandidateCoin{
             Symbol:  sym,
             Sources: []string{"oi_top"},
@@ -1618,43 +1619,45 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
     }
 
     // ===================================
-    // 3️⃣ 永远保证：持仓币种必须加入！
+    // 3️⃣ 永远保证：当前持仓币种必须加入！
+    //    👉 这块就是解决“持仓不在 oi_top 列表里”的关键
     // ===================================
-    for _, pos := range at.Positions {
-        sym := normalizeSymbol(pos.Symbol)
-        if !symbolSet[sym] {
+    positions, err := at.trader.GetPositions()
+    if err != nil {
+        log.Printf("⚠️ [%s] 获取持仓失败(用于候选币补充): %v", at.name, err)
+    } else {
+        for _, pos := range positions {
+            sym, _ := pos["symbol"].(string)
+            amt, _ := pos["positionAmt"].(float64)
+            if amt == 0 {
+                continue // 已平仓，跳过
+            }
+
+            sym = normalizeSymbol(sym)
+            if symbolSet[sym] {
+                // 已经在 OI Top 里了，就不用重复加，只补充来源信息即可（如果你以后想扩展）
+                continue
+            }
+
             symbolSet[sym] = true
             candidateCoins = append(candidateCoins, decision.CandidateCoin{
                 Symbol:  sym,
-                Sources: []string{"position"},
+                Sources: []string{"position"}, // 特别标记：这是“已有持仓”来源
             })
         }
     }
 
     // ===================================
-    // 4️⃣ 如果最终为空 → 只分析持仓
-    // ===================================
-    if len(candidateCoins) == 0 && len(at.Positions) > 0 {
-        log.Printf("⚠️ [%s] 无 OI Top 信号，仅分析持仓", at.name)
-        for _, pos := range at.Positions {
-            candidateCoins = append(candidateCoins, decision.CandidateCoin{
-                Symbol:  normalizeSymbol(pos.Symbol),
-                Sources: []string{"position_only"},
-            })
-        }
-    }
-
-    // ===================================
-    // 5️⃣ 如果真的没有任何币 → 返回错误（安全）
+    // 4️⃣ 如果最终为空 → OI Top 为空 + 没有任何持仓 → 本周期不交易（最安全）
     // ===================================
     if len(candidateCoins) == 0 {
-        return nil, fmt.Errorf("[%s] 无可分析币种(OI Top + 持仓均为空)", at.name)
+        return nil, fmt.Errorf("[%s] 无可分析币种 (OI Top + 持仓均为空)", at.name)
     }
 
-    log.Printf("📋 [%s] 最终候选币种: %v", at.name, symbolSet)
-
+    log.Printf("📋 [%s] 最终候选币种数量: %d, 明细: %v", at.name, len(candidateCoins), symbolSet)
     return candidateCoins, nil
 }
+
 
 
 // normalizeSymbol 标准化币种符号（确保以USDT结尾）
