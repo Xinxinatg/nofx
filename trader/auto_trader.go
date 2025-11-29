@@ -1578,69 +1578,82 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 
 // getCandidateCoins returns the list of candidate coins for the trader, prioritizing user-configured coins or falling back to OI Top symbols.
 // getCandidateCoins 获取交易员的候选币种列表
+// getCandidateCoins 获取交易员的候选币种列表（OI Top 专用模式 + 持仓兜底）
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-	// 1️⃣ 如果用户配置了自定义交易币种，优先使用自定义列表（行为保持不变）
-	if len(at.tradingCoins) > 0 {
-		var candidateCoins []decision.CandidateCoin
-		for _, coin := range at.tradingCoins {
-			symbol := normalizeSymbol(coin)
-			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-				Symbol:  symbol,
-				Sources: []string{"custom"},
-			})
-		}
 
-		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",
-			at.name, len(candidateCoins), at.tradingCoins)
-		return candidateCoins, nil
-	}
+    // 1️⃣ 如果用户配置了自定义币种 → 优先
+    if len(at.tradingCoins) > 0 {
+        var out []decision.CandidateCoin
+        for _, c := range at.tradingCoins {
+            out = append(out, decision.CandidateCoin{
+                Symbol:  normalizeSymbol(c),
+                Sources: []string{"custom"},
+            })
+        }
+        log.Printf("📋 [%s] 使用自定义币种 %v", at.name, at.tradingCoins)
+        return out, nil
+    }
 
-	// 2️⃣【Option 1：OI Top 专用模式】
-	// 没有配置自定义币种时，只使用 OI Top 信号产出的币种，不再夹杂默认 8 个 / AI500
-	const oiTopLimit = 50 // 你可以按需调节最多读取多少个 OI Top 币种
+    // ================================
+    // 2️⃣ OI Top 专用模式
+    // ================================
+    oiTopPositions, err := pool.GetOITopPositions() // 这里不再用 mergedPool！
+    if err != nil {
+        log.Printf("⚠️ [%s] 获取 OI Top 失败: %v", at.name, err)
+        oiTopPositions = []pool.OIPosition{} // 允许继续兜底
+    }
 
-	mergedPool, err := pool.GetMergedCoinPool(oiTopLimit)
-	if err != nil {
-		// OI Top 获取失败 → 本周期直接报错，不做交易（更安全）
-		return nil, fmt.Errorf("[%s] 获取合并币种池失败(OI Top 模式): %w", at.name, err)
-	}
+    // symbol -> true
+    symbolSet := make(map[string]bool)
+    var candidateCoins []decision.CandidateCoin
 
-	var candidateCoins []decision.CandidateCoin
-	var oiTopSymbols []string
+    // 加入所有 OI Top 币种
+    for _, p := range oiTopPositions {
+        sym := normalizeSymbol(p.Symbol)
+        symbolSet[sym] = true
+        candidateCoins = append(candidateCoins, decision.CandidateCoin{
+            Symbol:  sym,
+            Sources: []string{"oi_top"},
+        })
+    }
 
-	for _, sym := range mergedPool.AllSymbols {
-		normSym := normalizeSymbol(sym)
-		sources := mergedPool.SymbolSources[sym]
+    // ===================================
+    // 3️⃣ 永远保证：持仓币种必须加入！
+    // ===================================
+    for _, pos := range at.Positions {
+        sym := normalizeSymbol(pos.Symbol)
+        if !symbolSet[sym] {
+            symbolSet[sym] = true
+            candidateCoins = append(candidateCoins, decision.CandidateCoin{
+                Symbol:  sym,
+                Sources: []string{"position"},
+            })
+        }
+    }
 
-		// 只保留来源中包含 "oi_top" 的币
-		hasOiTop := false
-		for _, s := range sources {
-			if s == "oi_top" {
-				hasOiTop = true
-				break
-			}
-		}
-		if !hasOiTop {
-			continue
-		}
+    // ===================================
+    // 4️⃣ 如果最终为空 → 只分析持仓
+    // ===================================
+    if len(candidateCoins) == 0 && len(at.Positions) > 0 {
+        log.Printf("⚠️ [%s] 无 OI Top 信号，仅分析持仓", at.name)
+        for _, pos := range at.Positions {
+            candidateCoins = append(candidateCoins, decision.CandidateCoin{
+                Symbol:  normalizeSymbol(pos.Symbol),
+                Sources: []string{"position_only"},
+            })
+        }
+    }
 
-		candidateCoins = append(candidateCoins, decision.CandidateCoin{
-			Symbol:  normSym,
-			Sources: sources,
-		})
-		oiTopSymbols = append(oiTopSymbols, normSym)
-	}
+    // ===================================
+    // 5️⃣ 如果真的没有任何币 → 返回错误（安全）
+    // ===================================
+    if len(candidateCoins) == 0 {
+        return nil, fmt.Errorf("[%s] 无可分析币种(OI Top + 持仓均为空)", at.name)
+    }
 
-	if len(candidateCoins) == 0 {
-		// 没有任何 OI Top 信号 → 不做交易，比乱用默认币种安全
-		log.Printf("⚠️ [%s] OI Top 专用模式下未找到任何 OI Top 币种，本周期不交易", at.name)
-		return nil, fmt.Errorf("OI Top 专用模式下无候选币种")
-	}
+    log.Printf("📋 [%s] 最终候选币种: %v", at.name, symbolSet)
 
-	log.Printf("📋 [%s] OI Top 专用模式: 共 %d 个候选币种（全部来自 OI Top）: %v",
-		at.name, len(candidateCoins), oiTopSymbols)
-
-	return candidateCoins, nil
+    return candidateCoins, nil
 }
 
 
