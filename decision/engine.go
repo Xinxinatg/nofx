@@ -205,7 +205,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 		// 持仓价值 = 持仓量 × 当前价格
 		// 但现有持仓必须保留（需要决策是否平仓）
 		// 💡 OI 門檻配置：用戶可根據風險偏好調整
-		const minOIThresholdMillions = 3.0 // 可調整：15M(保守) / 10M(平衡) / 8M(寬鬆) / 5M(激進)
+		const minOIThresholdMillions = 1.0 // 可調整：15M(保守) / 10M(平衡) / 8M(寬鬆) / 5M(激進)
 
 		isExistingPosition := positionSymbols[symbol]
 		if !isExistingPosition && data.OpenInterest != nil && data.CurrentPrice > 0 {
@@ -792,8 +792,8 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 		// ✅ 验证最小开仓金额（防止数量格式化为 0 的错误）
 		// Binance 最小名义价值 10 USDT + 安全边际
-		const minPositionSizeGeneral = 21.0 // 10 + 20% 安全边际
-		const minPositionSizeBTCETH = 101.0  // BTC/ETH 因价格高和精度限制需要更大金额（更灵活）
+		const minPositionSizeGeneral = 31.0 // 10 + 20% 安全边际
+		const minPositionSizeBTCETH = 121.0  // BTC/ETH 因价格高和精度限制需要更大金额（更灵活）
 
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
 			if d.PositionSizeUSD < minPositionSizeBTCETH {
