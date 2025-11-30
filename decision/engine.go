@@ -867,22 +867,22 @@ func describeOISignal(symbol string, ctx *Context) string {
     const minAbs = 0.5 // 0.5% 以内就当成噪音，不强行打标签
 
     // OI 和价格都在涨 → 倾向做多
-    if oiDelta > minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
-    }
+    // if oiDelta > minAbs && priceDelta > minAbs {
+    //     return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
+    // }
 
-    // OI 和价格都在跌 → 倾向做空
-    if oiDelta < -minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
-    }
+    // // OI 和价格都在跌 → 倾向做空
+    // if oiDelta < -minAbs && priceDelta < -minAbs {
+    //     return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
+    // }
 
-    // 其它组合你也可以顺便提示一下
-    if oiDelta > minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
-    }
-    if oiDelta < -minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
-    }
+    // // 其它组合你也可以顺便提示一下
+    // if oiDelta > minAbs && priceDelta < -minAbs {
+    //     return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
+    // }
+    // if oiDelta < -minAbs && priceDelta > minAbs {
+    //     return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
+    // }
 
     // 变化不明显就不说
     return ""
