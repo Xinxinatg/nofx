@@ -864,7 +864,7 @@ func describeOISignal(symbol string, ctx *Context) string {
     priceDelta := oi.PriceDeltaPercent
 
     // 你可以根据自己习惯调这个“明显”的阈值
-    const minAbs = 1.0 // 1% 以内就当成噪音，不强行打标签
+    const minAbs = 0.5 // 0.5% 以内就当成噪音，不强行打标签
 
     // OI 和价格都在涨 → 倾向做多
     if oiDelta > minAbs && priceDelta > minAbs {
