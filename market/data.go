@@ -1,480 +1,594 @@
-import os
-import re
-import time
-import threading
-from typing import Dict, List, Optional
-import asyncio
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from telethon import TelegramClient, events
-from dotenv import load_dotenv
-import uvicorn
-from datetime import datetime, timedelta, timezone
-import requests  # ⬅️ 新增：调用 Binance API 用
+package market
 
-# ===========================
-# 1. 配置（从 .env 读取）
-# ===========================
-load_dotenv()
-
-API_ID = int(os.getenv("TG_API_ID", "123456"))        # my.telegram.org 获取
-API_HASH = os.getenv("TG_API_HASH", "your_api_hash")
-SESSION_NAME = os.getenv("TG_SESSION_NAME", "oi_relay")
-
-# 原来的 OI 频道
-TARGET_CHAT = os.getenv("TG_TARGET_CHAT", "方程式-OI&价格异动（抓庄神器）")
-
-# CoinGlass Bot 对话名或 @username，例如 "CoinGlass Bot"
-COINGLASS_BOT_CHAT = os.getenv("TG_COINGLASS_BOT", "CoinGlass Bot")
-
-HTTP_PORT = int(os.getenv("OI_RELAY_PORT", "8000"))
-
-BINANCE_FAPI_BASE = "https://fapi.binance.com"
-
-# ===========================
-# 2. OI 数据内存存储
-# ===========================
-class OIStore:
-    def __init__(self):
-        self._positions: Dict[str, dict] = {}
-        self._lock = threading.Lock()
-
-    def update_from_signal(
-        self,
-        symbol: str,
-        oi_delta_percent: float,
-        price_delta_percent: float,
-        current_oi_million: float,
-        marketcap_million: float,
-    ):
-        symbol = symbol.upper()
-        now = int(time.time())
-
-        with self._lock:
-            self._positions[symbol] = {
-                "symbol": symbol,
-                "oi_delta_percent": oi_delta_percent,
-                "price_delta_percent": price_delta_percent,
-                "current_oi": current_oi_million,
-                "oi_delta": 0.0,
-                "oi_delta_value": current_oi_million,
-                "marketcap": marketcap_million,
-                "ts": now,
-            }
-
-        print(
-            f"[STORE] {symbol}: "
-            f"OI {oi_delta_percent}%, Price {price_delta_percent}%, "
-            f"OI ${current_oi_million}M, MC ${marketcap_million}M"
-        )
-
-    def prune_old(self, max_age_seconds: int = 7200):
-        now = int(time.time())
-        removed = 0
-        with self._lock:
-            to_delete = [
-                sym for sym, p in self._positions.items()
-                if now - p.get("ts", 0) > max_age_seconds
-            ]
-            for sym in to_delete:
-                del self._positions[sym]
-                removed += 1
-        if removed > 0:
-            print(f"[PRUNE] Removed {removed} stale positions (> {max_age_seconds} s old)")
-
-    def export_oitop_response(self, limit: int = 20) -> dict:
-        """
-        导出 /oi_top：
-
-        1）按 |oi_delta_percent| 排序
-        2）对每个 symbol：
-            - 用 Binance Futures fapi/v1/klines 检查是否存在 USDT 永续
-            - 若存在：计算过去 15min 价格涨跌百分比，写入 price_delta_percent
-            - 若不存在：跳过，不返回给 AI Trader
-        """
-        # 先在锁内拷贝一份快照，避免长时间持锁进行网络请求
-        with self._lock:
-            positions_snapshot: List[dict] = list(self._positions.values())
-
-        # 排序并截前 limit 个
-        sorted_positions: List[dict] = sorted(
-            positions_snapshot,
-            key=lambda x: abs(x["oi_delta_percent"]),
-            reverse=True,
-        )[:limit * 2]  # 多抓一点，后面还要过滤非 binance futures
-
-        result = []
-        for p in sorted_positions:
-            symbol = p["symbol"]
-            price_delta_15m = fetch_binance_15m_price_change(symbol)
-
-            # None 说明：要么不是 Binance Futures，要么 15m 数据异常，直接丢弃
-            if price_delta_15m is None:
-                print(f"[BINANCE] Skip {symbol}: not futures or no 15m data")
-                continue
-
-            rank = len(result) + 1
-            result.append({
-                "symbol": symbol,
-                "rank": rank,
-                "current_oi": p["current_oi"],
-                "oi_delta": p["oi_delta"],
-                "oi_delta_percent": p["oi_delta_percent"],
-                "oi_delta_value": p["oi_delta_value"],
-                "price_delta_percent": price_delta_15m,
-                "net_long": 0.0,
-                "net_short": 0.0,
-            })
-
-            if len(result) >= limit:
-                break
-
-        return {
-            "success": True,
-            "data": {
-                "positions": result,
-                "count": len(result),
-                "exchange": "binance_futures",
-                "time_range": "900s",  # 15分钟
-            },
-        }
-
-oi_store = OIStore()
-
-# 市值缓存：原频道的 "$XXX MarketCap: $123M"
-mcap_buffer: Dict[str, float] = {}
-
-# ===========================
-# Binance 辅助函数
-# ===========================
-
-def normalize_symbol(symbol: str) -> str:
-    """
-    模仿你 Go 里的 Normalize:
-    - 已经是 XXXUSDT 的就不动
-    - 否则补上 USDT
-    """
-    symbol = symbol.upper()
-    if symbol.endswith("USDT"):
-        return symbol
-    return symbol + "USDT"
-
-def fetch_binance_15m_price_change(symbol: str) -> Optional[float]:
-    """
-    用 Binance Futures 1m K 线计算过去 15m 价格涨跌百分比：
-    - 不存在该合约 / 接口报错 → 返回 None
-    - 有数据 → 返回百分比（float）
-    """
-    norm_symbol = normalize_symbol(symbol)
-    url = f"{BINANCE_FAPI_BASE}/fapi/v1/klines"
-    params = {
-        "symbol": norm_symbol,
-        "interval": "1m",
-        "limit": 15,  # 最近 15 根 1mK
-    }
-
-    try:
-        resp = requests.get(url, params=params, timeout=3)
-    except Exception as e:
-        print(f"[BINANCE] Request error for {norm_symbol}: {e}")
-        return None
-
-    if resp.status_code != 200:
-        # 例如 {"code":-1121,"msg":"Invalid symbol."}
-        print(f"[BINANCE] HTTP {resp.status_code} for {norm_symbol}: {resp.text}")
-        return None
-
-    try:
-        data = resp.json()
-    except Exception as e:
-        print(f"[BINANCE] JSON decode error for {norm_symbol}: {e}")
-        return None
-
-    # 不存在合约时，Binance 会返回一个对象，而不是数组
-    if not isinstance(data, list) or len(data) < 2:
-        print(f"[BINANCE] No kline data or not list for {norm_symbol}: {data}")
-        return None
-
-    try:
-        first_close = float(data[0][4])   # [4] = close
-        last_close = float(data[-1][4])
-    except Exception as e:
-        print(f"[BINANCE] Parse kline close error for {norm_symbol}: {e}")
-        return None
-
-    if first_close <= 0:
-        return None
-
-    pct = (last_close - first_close) / first_close * 100.0
-    print(f"[BINANCE] {norm_symbol} 15m price change = {pct:.2f}%")
-    return pct
-
-# ===========================
-# 3. 原 OI 频道解析（🇺🇸 行 + 市值行）
-# ===========================
-EN_LINE_RE = re.compile(
-    r"""
-    ^🇺🇸\s*
-    (?P<symbol>[A-Z0-9]+)
-    .*?openinterest\s*(?P<oi_sign>[+\-])(?P<oi_pct>[\d\.]+)%,\s*
-    Price\s*(?P<price_sign>[+\-])(?P<price_pct>[\d\.]+)%\s*in\s*the\s*past\s*3600\s*seconds,\s*
-    OI:\s*\$(?P<oi_value>[\d\.]+)M,
-    .*?24H\s*Price\s*Change:\s*(?P<day_sign>[+\-])(?P<day_pct>[\d\.]+)%
-    """,
-    re.VERBOSE
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
-MCAP_LINE_RE = re.compile(
-    r"""
-    ^\$?(?P<symbol>[A-Z0-9]+)\s+MarketCap:\s*\$(?P<mcap>[\d\.]+)M
-    """,
-    re.VERBOSE
+// FundingRateCache 资金费率缓存结构
+// Binance Funding Rate 每 8 小时才更新一次，使用 1 小时缓存可显著减少 API 调用
+type FundingRateCache struct {
+	Rate      float64
+	UpdatedAt time.Time
+}
+
+var (
+	fundingRateMap sync.Map // map[string]*FundingRateCache
+	frCacheTTL     = 1 * time.Hour
 )
 
-def _signed(sign: str, value: str) -> float:
-    v = float(value)
-    return v if sign == '+' else -v
+// Get 获取指定代币的市场数据
+func Get(symbol string) (*Data, error) {
+	var klines3m, klines4h []Kline
+	var err error
+	// 标准化symbol
+	symbol = Normalize(symbol)
+	// 获取3分钟K线数据 (最近10个)
+	klines3m, err = WSMonitorCli.GetCurrentKlines(symbol, "3m") // 多获取一些用于计算
+	if err != nil {
+		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+	}
 
-def parse_en_line(text: str) -> Optional[dict]:
-    m = EN_LINE_RE.search(text)
-    if not m:
-        return None
-    return {
-        "symbol": m.group("symbol"),
-        "oi_delta_percent": _signed(m.group("oi_sign"), m.group("oi_pct")),
-        "price_delta_percent": _signed(m.group("price_sign"), m.group("price_pct")),
-        "oi_million": float(m.group("oi_value")),
-        "day_change_percent": _signed(m.group("day_sign"), m.group("day_pct")),
-    }
+	// Data staleness detection: Prevent DOGEUSDT-style price freeze issues
+	if isStaleData(klines3m, symbol) {
+		log.Printf("⚠️  WARNING: %s detected stale data (consecutive price freeze), skipping symbol", symbol)
+		return nil, fmt.Errorf("%s data is stale, possible cache failure", symbol)
+	}
 
-def parse_mcap_line(text: str) -> Optional[tuple]:
-    m = MCAP_LINE_RE.search(text)
-    if not m:
-        return None
-    return m.group("symbol"), float(m.group("mcap"))
+	// 获取4小时K线数据 (最近10个)
+	klines4h, err = WSMonitorCli.GetCurrentKlines(symbol, "4h") // 多获取用于计算指标
+	if err != nil {
+		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
+	}
 
-def process_text(text: str):
-    print(f"[TG] New message:\n{text}\n---")
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
+	// 检查数据是否为空
+	if len(klines3m) == 0 {
+		return nil, fmt.Errorf("3分钟K线数据为空")
+	}
+	if len(klines4h) == 0 {
+		return nil, fmt.Errorf("4小时K线数据为空")
+	}
 
-        en = parse_en_line(line)
-        if en:
-            symbol = en["symbol"]
-            mcap = mcap_buffer.get(symbol, 0.0)
-            oi_store.update_from_signal(
-                symbol=symbol,
-                oi_delta_percent=en["oi_delta_percent"],
-                price_delta_percent=en["price_delta_percent"],
-                current_oi_million=en["oi_million"],
-                marketcap_million=mcap,
-            )
-            print(
-                f"[FILTER] Accept {symbol} "
-                f"OI {en['oi_delta_percent']}%, Price {en['price_delta_percent']}%"
-            )
-            continue
+	// 计算当前指标 (基于3分钟最新数据)
+	currentPrice := klines3m[len(klines3m)-1].Close
+	currentEMA20 := calculateEMA(klines3m, 20)
+	currentMACD := calculateMACD(klines3m)
+	currentRSI7 := calculateRSI(klines3m, 7)
 
-        mcap_parsed = parse_mcap_line(line)
-        if mcap_parsed:
-            symbol, mcap = mcap_parsed
-            mcap_buffer[symbol] = mcap
-            print(f"[MCAP] {symbol} MarketCap = {mcap}M")
-            continue
+	// 计算价格变化百分比
+	// 1小时价格变化 = 20个3分钟K线前的价格
+	priceChange1h := 0.0
+	if len(klines3m) >= 21 { // 至少需要21根K线 (当前 + 20根前)
+		price1hAgo := klines3m[len(klines3m)-21].Close
+		if price1hAgo > 0 {
+			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
+		}
+	}
 
-# ===========================
-# 3.b CoinGlass Bot /oi（只要 15m）
-# ===========================
-OI_LINE_RE = re.compile(
-    r"""
-    ^\d+\.
-    (?P<symbol>\S+)
-    \s+
-    (?P<oi_value>[\d\.]+)
-    \s*
-    (?P<unit>[KMB])
-    \s*
-    (?P<pct_sign>[+\-]?)
-    (?P<pct>[\d\.]+)%
-    """,
-    re.VERBOSE
-)
+	// 4小时价格变化 = 1个4小时K线前的价格
+	priceChange4h := 0.0
+	if len(klines4h) >= 2 {
+		price4hAgo := klines4h[len(klines4h)-2].Close
+		if price4hAgo > 0 {
+			priceChange4h = ((currentPrice - price4hAgo) / price4hAgo) * 100
+		}
+	}
 
-def _unit_to_multiplier(u: str) -> float:
-    u = u.upper()
-    if u == "K":
-        return 1e3
-    if u == "M":
-        return 1e6
-    if u == "B":
-        return 1e9
-    return 1.0
+	// 获取OI数据
+	oiData, err := getOpenInterestData(symbol)
+	if err != nil {
+		// OI失败不影响整体,使用默认值
+		oiData = &OIData{Latest: 0, Average: 0}
+	}
 
-def parse_coinglass_message(text: str):
-    """
-    解析 CoinGlass Bot 的 /oi 消息。
-    只处理标题里包含 "(15m)" 的（例如 "OI Gainers (15m)"）。
-    """
-    if "(15m" not in text:
-        print("[CG] Skip non-15m message")
-        return
+	// 获取Funding Rate
+	fundingRate, _ := getFundingRate(symbol)
 
-    print(f"[CG-RAW]\n{text}\n---")
+	// 计算日内系列数据
+	intradayData := calculateIntradaySeries(klines3m)
 
-    section = None  # "oi_gainers" / "oi_losers"
+	// 计算长期数据
+	longerTermData := calculateLongerTermData(klines4h)
 
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
+	return &Data{
+		Symbol:            symbol,
+		CurrentPrice:      currentPrice,
+		PriceChange1h:     priceChange1h,
+		PriceChange4h:     priceChange4h,
+		CurrentEMA20:      currentEMA20,
+		CurrentMACD:       currentMACD,
+		CurrentRSI7:       currentRSI7,
+		OpenInterest:      oiData,
+		FundingRate:       fundingRate,
+		IntradaySeries:    intradayData,
+		LongerTermContext: longerTermData,
+	}, nil
+}
 
-        if line.startswith("OI Gainers"):
-            section = "oi_gainers"
-            print("[CG] Section = OI Gainers (15m)")
-            continue
-        if line.startswith("OI Losers"):
-            section = "oi_losers"
-            print("[CG] Section = OI Losers (15m)")
-            continue
-        if line.startswith("For more details"):
-            break
+// calculateEMA 计算EMA
+func calculateEMA(klines []Kline, period int) float64 {
+	if len(klines) < period {
+		return 0
+	}
 
-        if section in ("oi_gainers", "oi_losers"):
-            m = OI_LINE_RE.match(line)
-            if not m:
-                continue
-            symbol = m.group("symbol")
-            value = float(m.group("oi_value"))
-            unit = m.group("unit")
-            pct = float(m.group("pct"))
-            if m.group("pct_sign") == "-":
-                pct = -pct
+	// 计算SMA作为初始EMA
+	sum := 0.0
+	for i := 0; i < period; i++ {
+		sum += klines[i].Close
+	}
+	ema := sum / float64(period)
 
-            oi_usd = value * _unit_to_multiplier(unit)
-            oi_million = oi_usd / 1_000_000.0
+	// 计算EMA
+	multiplier := 2.0 / float64(period+1)
+	for i := period; i < len(klines); i++ {
+		ema = (klines[i].Close-ema)*multiplier + ema
+	}
 
-            oi_store.update_from_signal(
-                symbol=symbol,
-                oi_delta_percent=pct,
-                price_delta_percent=0.0,  # 价格等会儿通过 Binance 算
-                current_oi_million=oi_million,
-                marketcap_million=0.0,
-            )
-            print(f"[CG-OI] {section} {symbol} OI={oi_usd} pct={pct}")
+	return ema
+}
 
-# ===========================
-# 4. Telegram 监听
-# ===========================
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+// calculateMACD 计算MACD
+func calculateMACD(klines []Kline) float64 {
+	if len(klines) < 26 {
+		return 0
+	}
 
-# 原 OI 频道
-@client.on(events.NewMessage(chats=TARGET_CHAT))
-async def handler(event):
-    process_text(event.raw_text)
+	// 计算12期和26期EMA
+	ema12 := calculateEMA(klines, 12)
+	ema26 := calculateEMA(klines, 26)
 
-# CoinGlass Bot：新消息
-@client.on(events.NewMessage(chats=COINGLASS_BOT_CHAT))
-async def coinglass_new(event):
-    msg = event.message
-    text = msg.raw_text
+	// MACD = EMA12 - EMA26
+	return ema12 - ema26
+}
 
-    # 如果是 24h 的 OI 榜，并且有键盘，就自动点 15m 按钮
-    if "OI Gainers (24h)" in text or "OI Losers (24h)" in text:
-        if msg.reply_markup:
-            try:
-                await msg.click(text="15m")
-                print("[CG] Clicked 15m button on 24h message")
-            except Exception as e:
-                print(f"[CG] click 15m failed: {e}")
-                print("[CG] reply_markup =", msg.reply_markup)
-        else:
-            print("[CG] 24h message has no inline keyboard")
+// calculateRSI 计算RSI
+func calculateRSI(klines []Kline, period int) float64 {
+	if len(klines) <= period {
+		return 0
+	}
 
-    parse_coinglass_message(text)
+	gains := 0.0
+	losses := 0.0
 
-# CoinGlass Bot：消息被编辑（点 15m 按钮后）
-@client.on(events.MessageEdited(chats=COINGLASS_BOT_CHAT))
-async def coinglass_edited(event):
-    parse_coinglass_message(event.raw_text)
+	// 计算初始平均涨跌幅
+	for i := 1; i <= period; i++ {
+		change := klines[i].Close - klines[i-1].Close
+		if change > 0 {
+			gains += change
+		} else {
+			losses += -change
+		}
+	}
 
-async def backfill_recent_messages(minutes: int = 30):
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    print(f"[BACKFILL] 回溯最近 {minutes} 分钟内的消息，截止时间: {cutoff}")
+	avgGain := gains / float64(period)
+	avgLoss := losses / float64(period)
 
-    entity = await client.get_entity(TARGET_CHAT)
+	// 使用Wilder平滑方法计算后续RSI
+	for i := period + 1; i < len(klines); i++ {
+		change := klines[i].Close - klines[i-1].Close
+		if change > 0 {
+			avgGain = (avgGain*float64(period-1) + change) / float64(period)
+			avgLoss = (avgLoss * float64(period-1)) / float64(period)
+		} else {
+			avgGain = (avgGain * float64(period-1)) / float64(period)
+			avgLoss = (avgLoss*float64(period-1) + (-change)) / float64(period)
+		}
+	}
 
-    msgs: List[str] = []
-    async for msg in client.iter_messages(entity, limit=1000):
-        if msg.date < cutoff:
-            break
-        if not msg.raw_text:
-            continue
-        msgs.append(msg.raw_text)
+	if avgLoss == 0 {
+		return 100
+	}
 
-    print(f"[BACKFILL] 共拉取到 {len(msgs)} 条消息，开始按时间顺序处理（旧 -> 新）")
-    for raw_text in reversed(msgs):
-        process_text(raw_text)
-    print("[BACKFILL] 历史消息处理完成")
+	rs := avgGain / avgLoss
+	rsi := 100 - (100 / (1 + rs))
 
-async def coinglass_poll_task():
-    """
-    定时给 CoinGlass Bot 发送 /oi。
-    收到 24h 消息后，由 coinglass_new 自动点击 15m。
-    """
-    while True:
-        try:
-            await client.send_message(COINGLASS_BOT_CHAT, "/oi")
-            print("[CG-POLL] Sent /oi to CoinGlass Bot")
-        except Exception as e:
-            print(f"[CG-POLL] error sending /oi: {e}")
+	return rsi
+}
 
-        await asyncio.sleep(600)  # 10 分钟
+// calculateATR 计算ATR
+func calculateATR(klines []Kline, period int) float64 {
+	if len(klines) <= period {
+		return 0
+	}
 
-def run_tg_listener():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+	trs := make([]float64, len(klines))
+	for i := 1; i < len(klines); i++ {
+		high := klines[i].High
+		low := klines[i].Low
+		prevClose := klines[i-1].Close
 
-    async def main():
-        await client.start()
-        print(f"✅ Telegram listener started, watching chats: {TARGET_CHAT}, {COINGLASS_BOT_CHAT}")
+		tr1 := high - low
+		tr2 := math.Abs(high - prevClose)
+		tr3 := math.Abs(low - prevClose)
 
-        try:
-            await backfill_recent_messages(minutes=30)
-        except Exception as e:
-            print(f"[BACKFILL] 回溯消息时出错: {e}")
+		trs[i] = math.Max(tr1, math.Max(tr2, tr3))
+	}
 
-        asyncio.create_task(coinglass_poll_task())
+	// 计算初始ATR
+	sum := 0.0
+	for i := 1; i <= period; i++ {
+		sum += trs[i]
+	}
+	atr := sum / float64(period)
 
-        await client.run_until_disconnected()
+	// Wilder平滑
+	for i := period + 1; i < len(klines); i++ {
+		atr = (atr*float64(period-1) + trs[i]) / float64(period)
+	}
 
-    loop.run_until_complete(main())
+	return atr
+}
 
-def run_pruner():
-    while True:
-        oi_store.prune_old(max_age_seconds=2 * 3600)
-        time.sleep(300)
+// calculateIntradaySeries 计算日内系列数据
+func calculateIntradaySeries(klines []Kline) *IntradayData {
+	data := &IntradayData{
+		MidPrices:   make([]float64, 0, 10),
+		EMA20Values: make([]float64, 0, 10),
+		MACDValues:  make([]float64, 0, 10),
+		RSI7Values:  make([]float64, 0, 10),
+		RSI14Values: make([]float64, 0, 10),
+		Volume:      make([]float64, 0, 10),
+	}
 
-# ===========================
-# 5. HTTP API
-# ===========================
-app = FastAPI()
+	// 获取最近10个数据点
+	start := len(klines) - 10
+	if start < 0 {
+		start = 0
+	}
 
-@app.get("/oi_top")
-def get_oi_top():
-    data = oi_store.export_oitop_response(limit=20)
-    return JSONResponse(content=data)
+	for i := start; i < len(klines); i++ {
+		data.MidPrices = append(data.MidPrices, klines[i].Close)
+		data.Volume = append(data.Volume, klines[i].Volume)
 
-# ===========================
-# 6. 主入口
-# ===========================
-if __name__ == "__main__":
-    t = threading.Thread(target=run_tg_listener, daemon=True)
-    t.start()
+		// 计算每个点的EMA20
+		if i >= 19 {
+			ema20 := calculateEMA(klines[:i+1], 20)
+			data.EMA20Values = append(data.EMA20Values, ema20)
+		}
 
-    cleaner = threading.Thread(target=run_pruner, daemon=True)
-    cleaner.start()
+		// 计算每个点的MACD
+		if i >= 25 {
+			macd := calculateMACD(klines[:i+1])
+			data.MACDValues = append(data.MACDValues, macd)
+		}
 
-    print(f"Starting HTTP server on port {HTTP_PORT} ...")
-    uvicorn.run(app, host="0.0.0.0", port=HTTP_PORT)
+		// 计算每个点的RSI
+		if i >= 7 {
+			rsi7 := calculateRSI(klines[:i+1], 7)
+			data.RSI7Values = append(data.RSI7Values, rsi7)
+		}
+		if i >= 14 {
+			rsi14 := calculateRSI(klines[:i+1], 14)
+			data.RSI14Values = append(data.RSI14Values, rsi14)
+		}
+	}
+
+	// 计算3m ATR14
+	data.ATR14 = calculateATR(klines, 14)
+
+	return data
+}
+
+// calculateLongerTermData 计算长期数据
+func calculateLongerTermData(klines []Kline) *LongerTermData {
+	data := &LongerTermData{
+		MACDValues:  make([]float64, 0, 10),
+		RSI14Values: make([]float64, 0, 10),
+	}
+
+	// 计算EMA
+	data.EMA20 = calculateEMA(klines, 20)
+	data.EMA50 = calculateEMA(klines, 50)
+
+	// 计算ATR
+	data.ATR3 = calculateATR(klines, 3)
+	data.ATR14 = calculateATR(klines, 14)
+
+	// 计算成交量
+	if len(klines) > 0 {
+		data.CurrentVolume = klines[len(klines)-1].Volume
+		// 计算平均成交量
+		sum := 0.0
+		for _, k := range klines {
+			sum += k.Volume
+		}
+		data.AverageVolume = sum / float64(len(klines))
+	}
+
+	// 计算MACD和RSI序列
+	start := len(klines) - 10
+	if start < 0 {
+		start = 0
+	}
+
+	for i := start; i < len(klines); i++ {
+		if i >= 25 {
+			macd := calculateMACD(klines[:i+1])
+			data.MACDValues = append(data.MACDValues, macd)
+		}
+		if i >= 14 {
+			rsi14 := calculateRSI(klines[:i+1], 14)
+			data.RSI14Values = append(data.RSI14Values, rsi14)
+		}
+	}
+
+	return data
+}
+
+// getOpenInterestData 获取OI数据
+func getOpenInterestData(symbol string) (*OIData, error) {
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
+
+	apiClient := NewAPIClient()
+	resp, err := apiClient.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		OpenInterest string `json:"openInterest"`
+		Symbol       string `json:"symbol"`
+		Time         int64  `json:"time"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	oi, _ := strconv.ParseFloat(result.OpenInterest, 64)
+
+	return &OIData{
+		Latest:  oi,
+		Average: oi * 0.999, // 近似平均值
+	}, nil
+}
+
+// getFundingRate 获取资金费率（优化：使用 1 小时缓存）
+func getFundingRate(symbol string) (float64, error) {
+	// 检查缓存（有效期 1 小时）
+	// Funding Rate 每 8 小时才更新，1 小时缓存非常合理
+	if cached, ok := fundingRateMap.Load(symbol); ok {
+		cache := cached.(*FundingRateCache)
+		if time.Since(cache.UpdatedAt) < frCacheTTL {
+			// 缓存命中，直接返回
+			return cache.Rate, nil
+		}
+	}
+
+	// 缓存过期或不存在，调用 API
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s", symbol)
+
+	apiClient := NewAPIClient()
+	resp, err := apiClient.client.Get(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		Symbol          string `json:"symbol"`
+		MarkPrice       string `json:"markPrice"`
+		IndexPrice      string `json:"indexPrice"`
+		LastFundingRate string `json:"lastFundingRate"`
+		NextFundingTime int64  `json:"nextFundingTime"`
+		InterestRate    string `json:"interestRate"`
+		Time            int64  `json:"time"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, err
+	}
+
+	rate, _ := strconv.ParseFloat(result.LastFundingRate, 64)
+
+	// 更新缓存
+	fundingRateMap.Store(symbol, &FundingRateCache{
+		Rate:      rate,
+		UpdatedAt: time.Now(),
+	})
+
+	return rate, nil
+}
+
+// Format 格式化输出市场数据
+func Format(data *Data) string {
+	var sb strings.Builder
+
+	// 使用动态精度格式化价格
+	priceStr := formatPriceWithDynamicPrecision(data.CurrentPrice)
+	sb.WriteString(fmt.Sprintf("current_price = %s, current_ema20 = %.3f, current_macd = %.3f, current_rsi (7 period) = %.3f\n\n",
+		priceStr, data.CurrentEMA20, data.CurrentMACD, data.CurrentRSI7))
+
+	sb.WriteString(fmt.Sprintf("In addition, here is the latest %s open interest and funding rate for perps:\n\n",
+		data.Symbol))
+
+	if data.OpenInterest != nil {
+		// 使用动态精度格式化 OI 数据
+		oiLatestStr := formatPriceWithDynamicPrecision(data.OpenInterest.Latest)
+		oiAverageStr := formatPriceWithDynamicPrecision(data.OpenInterest.Average)
+		sb.WriteString(fmt.Sprintf("Open Interest: Latest: %s Average: %s\n\n",
+			oiLatestStr, oiAverageStr))
+	}
+
+	sb.WriteString(fmt.Sprintf("Funding Rate: %.2e\n\n", data.FundingRate))
+
+	if data.IntradaySeries != nil {
+		sb.WriteString("Intraday series (3‑minute intervals, oldest → latest):\n\n")
+
+		if len(data.IntradaySeries.MidPrices) > 0 {
+			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
+		}
+
+		if len(data.IntradaySeries.EMA20Values) > 0 {
+			sb.WriteString(fmt.Sprintf("EMA indicators (20‑period): %s\n\n", formatFloatSlice(data.IntradaySeries.EMA20Values)))
+		}
+
+		if len(data.IntradaySeries.MACDValues) > 0 {
+			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.IntradaySeries.MACDValues)))
+		}
+
+		if len(data.IntradaySeries.RSI7Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (7‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI7Values)))
+		}
+
+		if len(data.IntradaySeries.RSI14Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.IntradaySeries.RSI14Values)))
+		}
+
+		if len(data.IntradaySeries.Volume) > 0 {
+			sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.IntradaySeries.Volume)))
+		}
+
+		sb.WriteString(fmt.Sprintf("3m ATR (14‑period): %.3f\n\n", data.IntradaySeries.ATR14))
+	}
+
+	if data.LongerTermContext != nil {
+		sb.WriteString("Longer‑term context (4‑hour timeframe):\n\n")
+
+		sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
+			data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))
+
+		sb.WriteString(fmt.Sprintf("3‑Period ATR: %.3f vs. 14‑Period ATR: %.3f\n\n",
+			data.LongerTermContext.ATR3, data.LongerTermContext.ATR14))
+
+		sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
+			data.LongerTermContext.CurrentVolume, data.LongerTermContext.AverageVolume))
+
+		if len(data.LongerTermContext.MACDValues) > 0 {
+			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.LongerTermContext.MACDValues)))
+		}
+
+		if len(data.LongerTermContext.RSI14Values) > 0 {
+			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.LongerTermContext.RSI14Values)))
+		}
+	}
+
+	return sb.String()
+}
+
+// formatPriceWithDynamicPrecision 根据价格区间动态选择精度
+// 这样可以完美支持从超低价 meme coin (< 0.0001) 到 BTC/ETH 的所有币种
+func formatPriceWithDynamicPrecision(price float64) string {
+	switch {
+	case price < 0.0001:
+		// 超低价 meme coin: 1000SATS, 1000WHY, DOGS
+		// 0.00002070 → "0.00002070" (8位小数)
+		return fmt.Sprintf("%.8f", price)
+	case price < 0.001:
+		// 低价 meme coin: NEIRO, HMSTR, HOT, NOT
+		// 0.00015060 → "0.000151" (6位小数)
+		return fmt.Sprintf("%.6f", price)
+	case price < 0.01:
+		// 中低价币: PEPE, SHIB, MEME
+		// 0.00556800 → "0.005568" (6位小数)
+		return fmt.Sprintf("%.6f", price)
+	case price < 1.0:
+		// 低价币: ASTER, DOGE, ADA, TRX
+		// 0.9954 → "0.9954" (4位小数)
+		return fmt.Sprintf("%.4f", price)
+	case price < 100:
+		// 中价币: SOL, AVAX, LINK, MATIC
+		// 23.4567 → "23.4567" (4位小数)
+		return fmt.Sprintf("%.4f", price)
+	default:
+		// 高价币: BTC, ETH (节省 Token)
+		// 45678.9123 → "45678.91" (2位小数)
+		return fmt.Sprintf("%.2f", price)
+	}
+}
+
+// formatFloatSlice 格式化float64切片为字符串（使用动态精度）
+func formatFloatSlice(values []float64) string {
+	strValues := make([]string, len(values))
+	for i, v := range values {
+		strValues[i] = formatPriceWithDynamicPrecision(v)
+	}
+	return "[" + strings.Join(strValues, ", ") + "]"
+}
+
+// Normalize 标准化symbol,确保是USDT交易对
+func Normalize(symbol string) string {
+	symbol = strings.ToUpper(symbol)
+	if strings.HasSuffix(symbol, "USDT") {
+		return symbol
+	}
+	return symbol + "USDT"
+}
+
+// parseFloat 解析float值
+func parseFloat(v interface{}) (float64, error) {
+	switch val := v.(type) {
+	case string:
+		return strconv.ParseFloat(val, 64)
+	case float64:
+		return val, nil
+	case int:
+		return float64(val), nil
+	case int64:
+		return float64(val), nil
+	default:
+		return 0, fmt.Errorf("unsupported type: %T", v)
+	}
+}
+
+// isStaleData detects stale data (consecutive price freeze)
+// Fix DOGEUSDT-style issue: consecutive N periods with completely unchanged prices indicate data source anomaly
+func isStaleData(klines []Kline, symbol string) bool {
+	if len(klines) < 5 {
+		return false // Insufficient data to determine
+	}
+
+	// Detection threshold: 5 consecutive 3-minute periods with unchanged price (15 minutes without fluctuation)
+	const stalePriceThreshold = 5
+	const priceTolerancePct = 0.0001 // 0.01% fluctuation tolerance (avoid false positives)
+
+	// Take the last stalePriceThreshold K-lines
+	recentKlines := klines[len(klines)-stalePriceThreshold:]
+	firstPrice := recentKlines[0].Close
+
+	// Check if all prices are within tolerance
+	for i := 1; i < len(recentKlines); i++ {
+		priceDiff := math.Abs(recentKlines[i].Close-firstPrice) / firstPrice
+		if priceDiff > priceTolerancePct {
+			return false // Price fluctuation exists, data is normal
+		}
+	}
+
+	// Additional check: MACD and volume
+	// If price is unchanged but MACD/volume shows normal fluctuation, it might be a real market situation (extremely low volatility)
+	// Check if volume is also 0 (data completely frozen)
+	allVolumeZero := true
+	for _, k := range recentKlines {
+		if k.Volume > 0 {
+			allVolumeZero = false
+			break
+		}
+	}
+
+	if allVolumeZero {
+		log.Printf("⚠️  %s stale data confirmed: price freeze + zero volume", symbol)
+		return true
+	}
+
+	// Price frozen but has volume: might be extremely low volatility market, allow but log warning
+	log.Printf("⚠️  %s detected extreme price stability (no fluctuation for %d consecutive periods), but volume is normal", symbol, stalePriceThreshold)
+	return false
+}
