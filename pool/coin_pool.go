@@ -93,56 +93,56 @@ func SetDefaultCoins(coins []string) {
 
 // GetCoinPool 获取币种池列表（带重试和缓存机制）
 func GetCoinPool() ([]CoinInfo, error) {
-	// 优先检查是否启用默认币种列表
-	if coinPoolConfig.UseDefaultCoins {
-		log.Printf("✓ 已启用默认主流币种列表")
-		return convertSymbolsToCoins(defaultMainstreamCoins), nil
-	}
+    // ① 显式启用默认主流币种
+    if coinPoolConfig.UseDefaultCoins {
+        log.Printf("✓ 已启用默认主流币种列表")
+        return convertSymbolsToCoins(defaultMainstreamCoins), nil
+    }
 
-	// 检查API URL是否配置
-	if strings.TrimSpace(coinPoolConfig.APIURL) == "" {
-		log.Printf("⚠️  未配置币种池API URL，使用默认主流币种列表")
-		return convertSymbolsToCoins(defaultMainstreamCoins), nil
-	}
+    // ② API URL 未配置时，不再偷偷用默认主流币，而是返回错误/空
+    if strings.TrimSpace(coinPoolConfig.APIURL) == "" {
+        log.Printf("⚠️  未配置币种池API URL，返回空列表，不使用默认主流币")
+        return []CoinInfo{}, fmt.Errorf("未配置币种池API URL")
+    }
 
-	maxRetries := 3
-	var lastErr error
+    maxRetries := 3
+    var lastErr error
 
-	// 尝试从API获取
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			log.Printf("⚠️  第%d次重试获取币种池（共%d次）...", attempt, maxRetries)
-			time.Sleep(2 * time.Second) // 重试前等待2秒
-		}
+    // ③ 尝试从 API 获取
+    for attempt := 1; attempt <= maxRetries; attempt++ {
+        if attempt > 1 {
+            log.Printf("⚠️  第%d次重试获取币种池（共%d次）...", attempt, maxRetries)
+            time.Sleep(2 * time.Second)
+        }
 
-		coins, err := fetchCoinPool()
-		if err == nil {
-			if attempt > 1 {
-				log.Printf("✓ 第%d次重试成功", attempt)
-			}
-			// 成功获取后保存到缓存
-			if err := saveCoinPoolCache(coins); err != nil {
-				log.Printf("⚠️  保存币种池缓存失败: %v", err)
-			}
-			return coins, nil
-		}
+        coins, err := fetchCoinPool()
+        if err == nil {
+            if attempt > 1 {
+                log.Printf("✓ 第%d次重试成功", attempt)
+            }
+            if err := saveCoinPoolCache(coins); err != nil {
+                log.Printf("⚠️  保存币种池缓存失败: %v", err)
+            }
+            return coins, nil
+        }
 
-		lastErr = err
-		log.Printf("❌ 第%d次请求失败: %v", attempt, err)
-	}
+        lastErr = err
+        log.Printf("❌ 第%d次请求失败: %v", attempt, err)
+    }
 
-	// API获取失败，尝试使用缓存
-	log.Printf("⚠️  API请求全部失败，尝试使用历史缓存数据...")
-	cachedCoins, err := loadCoinPoolCache()
-	if err == nil {
-		log.Printf("✓ 使用历史缓存数据（共%d个币种）", len(cachedCoins))
-		return cachedCoins, nil
-	}
+    // ④ API 获取失败 → 尝试缓存
+    log.Printf("⚠️  API请求全部失败，尝试使用历史缓存数据...")
+    cachedCoins, err := loadCoinPoolCache()
+    if err == nil {
+        log.Printf("✓ 使用历史缓存数据（共%d个币种）", len(cachedCoins))
+        return cachedCoins, nil
+    }
 
-	// 缓存也失败，使用默认主流币种
-	log.Printf("⚠️  无法加载缓存数据（最后错误: %v），使用默认主流币种列表", lastErr)
-	return convertSymbolsToCoins(defaultMainstreamCoins), nil
+    // ⑤ 缓存也失败 → 返回空，而不是默认 8 个
+    log.Printf("⚠️  无法加载缓存数据（最后错误: %v），返回空列表，不使用默认主流币", lastErr)
+    return []CoinInfo{}, fmt.Errorf("获取币种池失败: %w", lastErr)
 }
+
 
 // fetchCoinPool 实际执行币种池请求
 func fetchCoinPool() ([]CoinInfo, error) {
