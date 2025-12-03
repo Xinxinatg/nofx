@@ -14,14 +14,14 @@ import (
 
 // defaultMainstreamCoins 默认主流币种池（从配置文件读取）
 var defaultMainstreamCoins = []string{
-	// "BTCUSDT",
-	// "ETHUSDT",
-	// "SOLUSDT",
-	// "BNBUSDT",
-	// "XRPUSDT",
-	// "DOGEUSDT",
-	// "ADAUSDT",
-	// "HYPEUSDT",
+	"BTCUSDT",
+	"ETHUSDT",
+	"SOLUSDT",
+	"BNBUSDT",
+	"XRPUSDT",
+	"DOGEUSDT",
+	"ADAUSDT",
+	"HYPEUSDT",
 }
 
 // CoinPoolConfig 币种池配置
@@ -93,15 +93,15 @@ func SetDefaultCoins(coins []string) {
 
 // GetCoinPool 获取币种池列表（带重试和缓存机制）
 func GetCoinPool() ([]CoinInfo, error) {
-    // ① 显式启用默认主流币种
+    // ① 显式启用默认主流币种（只在你真的想用默认池的时候）
     if coinPoolConfig.UseDefaultCoins {
         log.Printf("✓ 已启用默认主流币种列表")
         return convertSymbolsToCoins(defaultMainstreamCoins), nil
     }
 
-    // ② API URL 未配置时，不再偷偷用默认主流币，而是返回错误/空
+    // ② API URL 未配置时，不再偷偷用默认币，而是返回空
     if strings.TrimSpace(coinPoolConfig.APIURL) == "" {
-        log.Printf("⚠️  未配置币种池API URL，返回空列表，不使用默认主流币")
+        log.Printf("⚠️  未配置币种池API URL，返回空列表（不使用默认主流币）")
         return []CoinInfo{}, fmt.Errorf("未配置币种池API URL")
     }
 
@@ -120,6 +120,7 @@ func GetCoinPool() ([]CoinInfo, error) {
             if attempt > 1 {
                 log.Printf("✓ 第%d次重试成功", attempt)
             }
+            // 成功获取后保存到缓存
             if err := saveCoinPoolCache(coins); err != nil {
                 log.Printf("⚠️  保存币种池缓存失败: %v", err)
             }
@@ -130,7 +131,7 @@ func GetCoinPool() ([]CoinInfo, error) {
         log.Printf("❌ 第%d次请求失败: %v", attempt, err)
     }
 
-    // ④ API 获取失败 → 尝试缓存
+    // ④ API 获取失败，尝试使用缓存
     log.Printf("⚠️  API请求全部失败，尝试使用历史缓存数据...")
     cachedCoins, err := loadCoinPoolCache()
     if err == nil {
@@ -138,8 +139,8 @@ func GetCoinPool() ([]CoinInfo, error) {
         return cachedCoins, nil
     }
 
-    // ⑤ 缓存也失败 → 返回空，而不是默认 8 个
-    log.Printf("⚠️  无法加载缓存数据（最后错误: %v），返回空列表，不使用默认主流币", lastErr)
+    // ⑤ 缓存也失败，返回空，而不是默认主流币
+    log.Printf("⚠️  无法加载缓存数据（最后错误: %v），返回空列表（不使用默认主流币）", lastErr)
     return []CoinInfo{}, fmt.Errorf("获取币种池失败: %w", lastErr)
 }
 
