@@ -590,57 +590,54 @@ type MergedCoinPool struct {
 
 // GetMergedCoinPool 获取合并后的币种池（AI500 + OI Top，去重）
 func GetMergedCoinPool(ai500Limit int) (*MergedCoinPool, error) {
-	// 1. 获取AI500数据
-	// ai500TopSymbols, err := GetTopRatedCoins(ai500Limit)
-	// if err != nil {
-	// 	log.Printf("⚠️  获取AI500数据失败: %v", err)
-	// 	ai500TopSymbols = []string{} // 失败时用空列表
-	// }
-    ai500TopSymbols = []string{}
-	// 2. 获取OI Top数据
-	oiTopSymbols, err := GetOITopSymbols()
-	if err != nil {
-		log.Printf("⚠️  获取OI Top数据失败: %v", err)
-		oiTopSymbols = []string{} // 失败时用空列表
-	}
 
-	// 3. 合并并去重
-	symbolSet := make(map[string]bool)
-	symbolSources := make(map[string][]string)
+    // 1. 强制 AI500 为空（声明 + 赋值）
+    ai500TopSymbols := []string{}  // <--- 声明变量并赋空值
 
-	// 添加AI500币种
-	for _, symbol := range ai500TopSymbols {
-		symbolSet[symbol] = true
-		symbolSources[symbol] = append(symbolSources[symbol], "ai500")
-	}
+    // 2. 获取 OI Top 数据
+    oiTopSymbols, err := GetOITopSymbols()
+    if err != nil {
+        log.Printf("⚠️  获取OI Top数据失败: %v", err)
+        oiTopSymbols = []string{}
+    }
 
-	// 添加OI Top币种
-	for _, symbol := range oiTopSymbols {
-		if !symbolSet[symbol] {
-			symbolSet[symbol] = true
-		}
-		symbolSources[symbol] = append(symbolSources[symbol], "oi_top")
-	}
+    // 3. 合并并去重
+    symbolSet := make(map[string]bool)
+    symbolSources := make(map[string][]string)
 
-	// 转换为数组
-	var allSymbols []string
-	for symbol := range symbolSet {
-		allSymbols = append(allSymbols, symbol)
-	}
+    // AI500 一定为空，所以这段实际上不会加任何数据
+    for _, symbol := range ai500TopSymbols {
+        symbolSet[symbol] = true
+        symbolSources[symbol] = append(symbolSources[symbol], "ai500")
+    }
 
-	// 获取完整数据
-	ai500Coins, _ := GetCoinPool()
-	oiTopPositions, _ := GetOITopPositions()
+    // 加 OI_TOP
+    for _, symbol := range oiTopSymbols {
+        if !symbolSet[symbol] {
+            symbolSet[symbol] = true
+        }
+        symbolSources[symbol] = append(symbolSources[symbol], "oi_top")
+    }
 
-	merged := &MergedCoinPool{
-		AI500Coins:    ai500Coins,
-		OITopCoins:    oiTopPositions,
-		AllSymbols:    allSymbols,
-		SymbolSources: symbolSources,
-	}
+    // 转为数组
+    var allSymbols []string
+    for symbol := range symbolSet {
+        allSymbols = append(allSymbols, symbol)
+    }
 
-	log.Printf("📊 币种池合并完成: AI500=%d, OI_Top=%d, 总计(去重)=%d",
-		len(ai500TopSymbols), len(oiTopSymbols), len(allSymbols))
+    // 返回包含真实完整池（不影响 AllSymbols）
+    ai500Coins, _ := GetCoinPool()
+    oiTopPositions, _ := GetOITopPositions()
 
-	return merged, nil
+    merged := &MergedCoinPool{
+        AI500Coins:    ai500Coins,     // ⚠️ 这是完整 AI500 数据，但不会参与 AllSymbols
+        OITopCoins:    oiTopPositions,
+        AllSymbols:    allSymbols,     // <-- 你真正用于交易的币种
+        SymbolSources: symbolSources,
+    }
+
+    log.Printf("📊 币种池合并完成: AI500=%d, OI_Top=%d, 总计(去重)=%d",
+        len(ai500TopSymbols), len(oiTopSymbols), len(allSymbols))
+
+    return merged, nil
 }
