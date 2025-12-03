@@ -591,12 +591,12 @@ type MergedCoinPool struct {
 // GetMergedCoinPool 获取合并后的币种池（AI500 + OI Top，去重）
 func GetMergedCoinPool(ai500Limit int) (*MergedCoinPool, error) {
 	// 1. 获取AI500数据
-	ai500TopSymbols, err := GetTopRatedCoins(ai500Limit)
-	if err != nil {
-		log.Printf("⚠️  获取AI500数据失败: %v", err)
-		ai500TopSymbols = []string{} // 失败时用空列表
-	}
-
+	// ai500TopSymbols, err := GetTopRatedCoins(ai500Limit)
+	// if err != nil {
+	// 	log.Printf("⚠️  获取AI500数据失败: %v", err)
+	// 	ai500TopSymbols = []string{} // 失败时用空列表
+	// }
+    ai500TopSymbols = []string{}
 	// 2. 获取OI Top数据
 	oiTopSymbols, err := GetOITopSymbols()
 	if err != nil {
