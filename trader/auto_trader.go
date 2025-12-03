@@ -1484,8 +1484,8 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 			at.name, ai500Limit, len(mergedPool.OITopCoins), len(candidateCoins))
 	}
 
-	// ② 合并自定义币种（如果配置）
-	if len(at.tradingCoins) > 0 {
+	// ② 合并自定义币种（仅在 AI500/OI_TOP 为空时）
+	if len(candidateCoins) == 0 && len(at.tradingCoins) > 0 {
 		var added []string
 		for _, coin := range at.tradingCoins {
 			symbol := normalizeSymbol(coin)
@@ -1500,9 +1500,10 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
 			added = append(added, symbol)
 		}
 		if len(added) > 0 {
-			log.Printf("➕ [%s] 合并自定义币种 %d 个: %v", at.name, len(added), added)
+			log.Printf("➕ [%s] 使用自定义币种 %d 个: %v（AI500/OI_TOP 为空）", at.name, len(added), added)
 		}
 	}
+
 
 	// ③ fallback → 数据库默认币种
 	if len(candidateCoins) == 0 && len(at.defaultCoins) > 0 {
