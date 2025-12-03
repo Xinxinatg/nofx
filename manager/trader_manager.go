@@ -7,7 +7,7 @@ import (
 	"log"
 	"nofx/config"
 	"nofx/trader"
-	"nofx/pool"
+	"nofx/pool"  // ← 必须加
 	"sort"
 	"strconv"
 	"strings"
@@ -170,14 +170,12 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 			log.Printf("🔍 用户 %s 暂未配置信号源", traderCfg.UserID)
 		}
 
-				// ⬅️ 在这里真正把 URL 喂给 pool 包（全局配置）
-		if coinPoolURL != "" {
-			pool.SetCoinPoolAPI(coinPoolURL)
-			log.Printf("✅ 已设置 CoinPool API URL: %s", coinPoolURL)
+		// 🚀 必须新增：注入信号源 URL
+		if strings.TrimSpace(coinPoolURL) != "" {
+				pool.SetCoinPoolAPI(coinPoolURL)
 		}
-		if oiTopURL != "" {
-			pool.SetOITopAPI(oiTopURL)
-			log.Printf("✅ 已设置 OI Top API URL: %s", oiTopURL)
+		if strings.TrimSpace(oiTopURL) != "" {
+				pool.SetOITopAPI(oiTopURL)
 		}
 
 		// 添加到TraderManager
@@ -212,9 +210,9 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	// if len(tradingCoins) == 0 {
-	// 	tradingCoins = defaultCoins
-	// }
+	if len(tradingCoins) == 0 {
+		tradingCoins = defaultCoins
+	}
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string
@@ -326,9 +324,9 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	// if len(tradingCoins) == 0 {
-	// 	tradingCoins = defaultCoins
-	// }
+	if len(tradingCoins) == 0 {
+		tradingCoins = defaultCoins
+	}
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string
@@ -765,13 +763,12 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		log.Printf("🔍 用户 %s 暂未配置信号源", userID)
 	}
 
-	if coinPoolURL != "" {
-		pool.SetCoinPoolAPI(coinPoolURL)
-		log.Printf("✅ 已设置 CoinPool API URL: %s", coinPoolURL)
+	// 🚀 核心补丁：把 URL 注入到池模块，否则永远显示“未配置”
+	if strings.TrimSpace(coinPoolURL) != "" {
+			pool.SetCoinPoolAPI(coinPoolURL)
 	}
-	if oiTopURL != "" {
-		pool.SetOITopAPI(oiTopURL)
-		log.Printf("✅ 已设置 OI Top API URL: %s", oiTopURL)
+	if strings.TrimSpace(oiTopURL) != "" {
+			pool.SetOITopAPI(oiTopURL)
 	}
 
 	// 解析配置
@@ -989,15 +986,14 @@ func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, trade
 		log.Printf("🔍 用户 %s 暂未配置信号源", userID)
 	}
 
-	if coinPoolURL != "" {
-		pool.SetCoinPoolAPI(coinPoolURL)
-		log.Printf("✅ 已设置 CoinPool API URL: %s", coinPoolURL)
+	// 🚀 核心补丁：把 URL 注入到池模块，否则永远显示“未配置”
+	if strings.TrimSpace(coinPoolURL) != "" {
+			pool.SetCoinPoolAPI(coinPoolURL)
 	}
-	if oiTopURL != "" {
-		pool.SetOITopAPI(oiTopURL)
-		log.Printf("✅ 已设置 OI Top API URL: %s", oiTopURL)
+	if strings.TrimSpace(oiTopURL) != "" {
+			pool.SetOITopAPI(oiTopURL)
 	}
-
+	
 	// 7. 解析系统配置
 	maxDailyLoss := 10.0 // 默认值
 	if val, err := strconv.ParseFloat(maxDailyLossStr, 64); err == nil {
@@ -1056,9 +1052,9 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 	}
 
 	// 如果没有指定交易币种，使用默认币种
-	// if len(tradingCoins) == 0 {
-	// 	tradingCoins = defaultCoins
-	// }
+	if len(tradingCoins) == 0 {
+		tradingCoins = defaultCoins
+	}
 
 	// 根据交易员配置决定是否使用信号源
 	var effectiveCoinPoolURL string

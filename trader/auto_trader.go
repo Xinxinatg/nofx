@@ -50,6 +50,7 @@ type AutoTraderConfig struct {
 	LighterTestnet          bool   // 是否使用testnet
 
 	CoinPoolAPIURL string
+	OITopAPIURL string
 
 	// AI配置
 	UseQwen     bool
@@ -163,11 +164,14 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		}
 	}
 
-	// 初始化币种池API
+	// 初始化信号源（CoinPool + OI Top）
 	if config.CoinPoolAPIURL != "" {
-		pool.SetCoinPoolAPI(config.CoinPoolAPIURL)
+			pool.SetCoinPoolAPI(config.CoinPoolAPIURL)
 	}
 
+	if config.OITopAPIURL != "" {
+			pool.SetOITopAPI(config.OITopAPIURL)
+	}
 	// 设置默认交易平台
 	if config.Exchange == "" {
 		config.Exchange = "binance"
@@ -1457,208 +1461,72 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 	return sorted
 }
 
-// getCandidateCoins 获取交易员的候选币种列表
-// func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-// 	// 如果用户配置了自定义交易币种，优先使用自定义列表
-// 	if len(at.tradingCoins) > 0 {
-// 		var candidateCoins []decision.CandidateCoin
-// 		for _, coin := range at.tradingCoins {
-// 			symbol := normalizeSymbol(coin)
-// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-// 				Symbol:  symbol,
-// 				Sources: []string{"custom"},
-// 			})
-// 		}
-
-// 		log.Printf("📋 [%s] 使用自定义币种: %d个币种 %v",
-// 			at.name, len(candidateCoins), at.tradingCoins)
-// 		return candidateCoins, nil
-// 	}
-
-// 	// =====================
-// 	// 下面是「无自定义币种」的情况：
-// 	// 用：默认币种 ∪ (AI500 + OI Top)
-// 	// =====================
-
-// 	const ai500Limit = 20
-
-// 	// 先尝试获取合并币种池（AI500 + OI Top）
-// 	var mergedPool *pool.MergedCoinPool
-// 	var err error
-// 	mergedPool, err = pool.GetMergedCoinPool(ai500Limit)
-// 	if err != nil {
-// 		log.Printf("⚠️ [%s] 获取合并币种池失败: %v", at.name, err)
-// 		// 出错时 mergedPool 就当 nil，用不到就算了
-// 	}
-
-// 	// 建一个 symbol -> sources 的 map，方便后面合并来源
-// 	symbolSources := make(map[string][]string)
-// 	if mergedPool != nil {
-// 		for sym, srcs := range mergedPool.SymbolSources {
-// 			normSym := normalizeSymbol(sym)
-// 			symbolSources[normSym] = append([]string{}, srcs...)
-// 		}
-// 	}
-
-// 	var candidateCoins []decision.CandidateCoin
-// 	symbolSet := make(map[string]bool)
-
-// 	// 1️⃣ 先放数据库配置的默认币种
-// 	if len(at.defaultCoins) > 0 {
-// 		for _, coin := range at.defaultCoins {
-// 			symbol := normalizeSymbol(coin)
-// 			symbolSet[symbol] = true
-
-// 			sources := symbolSources[symbol]
-// 			if len(sources) == 0 {
-// 				sources = []string{"default"}
-// 			} else {
-// 				// 把 "default" 也标记进去（去重）
-// 				hasDefault := false
-// 				for _, s := range sources {
-// 					if s == "default" {
-// 						hasDefault = true
-// 						break
-// 					}
-// 				}
-// 				if !hasDefault {
-// 					sources = append(sources, "default")
-// 				}
-// 			}
-
-// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-// 				Symbol:  symbol,
-// 				Sources: sources,
-// 			})
-// 		}
-// 	}
-
-// 	// 2️⃣ 再把合并池里剩下的（AI500 / OI Top 专属）补进来
-// 	if mergedPool != nil {
-// 		for _, symbol := range mergedPool.AllSymbols {
-// 			symbol = normalizeSymbol(symbol)
-// 			if symbolSet[symbol] {
-// 				continue // 已在默认币种中
-// 			}
-// 			symbolSet[symbol] = true
-
-// 			sources := symbolSources[symbol]
-// 			if len(sources) == 0 {
-// 				sources = []string{"ai500"} // 理论上不会，但兜底
-// 			}
-
-// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-// 				Symbol:  symbol,
-// 				Sources: sources,
-// 			})
-// 		}
-// 	}
-
-// 	// 3️⃣ 如果既没有默认币种又 mergedPool 失败，就兜底用硬编码的默认币种池
-// 	if len(candidateCoins) == 0 {
-// 		log.Printf("⚠️ [%s] 数据库无默认币种且合并币种池不可用，使用硬编码默认币种池", at.name)
-// 		fallback := []string{"BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"}
-// 		for _, s := range fallback {
-// 			candidateCoins = append(candidateCoins, decision.CandidateCoin{
-// 				Symbol:  normalizeSymbol(s),
-// 				Sources: []string{"fallback"},
-// 			})
-// 		}
-// 	}
-
-// 	log.Printf("📋 [%s] 候选币种汇总: 默认=%d, 合并池额外=%d, 总计=%d个币种",
-// 		at.name,
-// 		len(at.defaultCoins),
-// 		len(candidateCoins)-len(at.defaultCoins),
-// 		len(candidateCoins),
-// 	)
-
-// 	return candidateCoins, nil
-// }
-
-// getCandidateCoins returns the list of candidate coins for the trader, prioritizing user-configured coins or falling back to OI Top symbols.
-// getCandidateCoins 获取交易员的候选币种列表（OI Top 专用 + 持仓兜底）
+// getCandidateCoins 获取交易员的候选币种列表（支持 自定义 + AI500 + OI_TOP 三方合并）
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
-    // 1️⃣ 如果用户配置了自定义币种 → 优先（行为不变）
-    if len(at.tradingCoins) > 0 {
-        var out []decision.CandidateCoin
-        for _, c := range at.tradingCoins {
-            out = append(out, decision.CandidateCoin{
-                Symbol:  normalizeSymbol(c),
-                Sources: []string{"custom"},
-            })
-        }
-        log.Printf("📋 [%s] 使用自定义币种 %v", at.name, at.tradingCoins)
-        return out, nil
-    }
+	var candidateCoins []decision.CandidateCoin
+	seen := map[string]bool{}
 
-    // ================================
-    // 2️⃣ OI Top 专用模式
-    // ================================
-    oiTopPositions, err := pool.GetOITopPositions()
-    if err != nil {
-        log.Printf("⚠️ [%s] 获取 OI Top 失败: %v", at.name, err)
-        oiTopPositions = []pool.OIPosition{} // 允许后面继续走持仓兜底
-    }
+	// ① AI500 + OI_TOP 合并池
+	const ai500Limit = 20
+	mergedPool, err := pool.GetMergedCoinPool(ai500Limit)
+	if err == nil && len(mergedPool.AllSymbols) > 0 {
+		for _, symbol := range mergedPool.AllSymbols {
+			if seen[symbol] {
+				continue
+			}
+			seen[symbol] = true
+			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+				Symbol:  symbol,
+				Sources: mergedPool.SymbolSources[symbol], // ai500 / oi_top / both
+			})
+		}
+		log.Printf("📋 [%s] 合并币池: AI500前%d + OI_TOP%d → %d个候选币",
+			at.name, ai500Limit, len(mergedPool.OITopCoins), len(candidateCoins))
+	}
 
-    symbolSet := make(map[string]bool)
-    var candidateCoins []decision.CandidateCoin
+	// ② 合并自定义币种（如果配置）
+	if len(at.tradingCoins) > 0 {
+		var added []string
+		for _, coin := range at.tradingCoins {
+			symbol := normalizeSymbol(coin)
+			if seen[symbol] {
+				continue
+			}
+			seen[symbol] = true
+			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+				Symbol:  symbol,
+				Sources: []string{"custom"},
+			})
+			added = append(added, symbol)
+		}
+		if len(added) > 0 {
+			log.Printf("➕ [%s] 合并自定义币种 %d 个: %v", at.name, len(added), added)
+		}
+	}
 
-    // 2.1 把所有 OI Top 币种加进去
-    for _, p := range oiTopPositions {
-        sym := normalizeSymbol(p.Symbol)
-        if symbolSet[sym] {
-            continue
-        }
-        symbolSet[sym] = true
+	// ③ fallback → 数据库默认币种
+	if len(candidateCoins) == 0 && len(at.defaultCoins) > 0 {
+		for _, coin := range at.defaultCoins {
+			symbol := normalizeSymbol(coin)
+			if seen[symbol] {
+				continue
+			}
+			seen[symbol] = true
+			candidateCoins = append(candidateCoins, decision.CandidateCoin{
+				Symbol:  symbol,
+				Sources: []string{"default"},
+			})
+		}
+		log.Printf("📋 [%s] fallback → 使用数据库默认币种 %d 个", at.name, len(candidateCoins))
+	}
 
-        candidateCoins = append(candidateCoins, decision.CandidateCoin{
-            Symbol:  sym,
-            Sources: []string{"oi_top"},
-        })
-    }
+	// ④ 最终检查
+	if len(candidateCoins) == 0 {
+		return nil, fmt.Errorf("候选币种为空：AI500/OI_TOP/自定义/默认均无结果")
+	}
 
-    // ===================================
-    // 3️⃣ 永远保证：当前持仓币种必须加入！
-    //    👉 这块就是解决“持仓不在 oi_top 列表里”的关键
-    // ===================================
-    positions, err := at.trader.GetPositions()
-    if err != nil {
-        log.Printf("⚠️ [%s] 获取持仓失败(用于候选币补充): %v", at.name, err)
-    } else {
-        for _, pos := range positions {
-            sym, _ := pos["symbol"].(string)
-            amt, _ := pos["positionAmt"].(float64)
-            if amt == 0 {
-                continue // 已平仓，跳过
-            }
-
-            sym = normalizeSymbol(sym)
-            if symbolSet[sym] {
-                // 已经在 OI Top 里了，就不用重复加，只补充来源信息即可（如果你以后想扩展）
-                continue
-            }
-
-            symbolSet[sym] = true
-            candidateCoins = append(candidateCoins, decision.CandidateCoin{
-                Symbol:  sym,
-                Sources: []string{"position"}, // 特别标记：这是“已有持仓”来源
-            })
-        }
-    }
-
-    // ===================================
-    // 4️⃣ 如果最终为空 → OI Top 为空 + 没有任何持仓 → 本周期不交易（最安全）
-    // ===================================
-    if len(candidateCoins) == 0 {
-        return nil, fmt.Errorf("[%s] 无可分析币种 (OI Top + 持仓均为空)", at.name)
-    }
-
-    log.Printf("📋 [%s] 最终候选币种数量: %d, 明细: %v", at.name, len(candidateCoins), symbolSet)
-    return candidateCoins, nil
+	return candidateCoins, nil
 }
-
-
 
 // normalizeSymbol 标准化币种符号（确保以USDT结尾）
 func normalizeSymbol(symbol string) string {
