@@ -465,8 +465,8 @@ func buildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	// sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
-	sb.WriteString("请根据数据给出最终决策，禁止展示思维链条，只输出JSON格式的决策列表\n")
+	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
+	// sb.WriteString("请根据数据给出最终决策，展示思维链条，只输出JSON格式的决策列表\n")
 
 	return sb.String()
 }
