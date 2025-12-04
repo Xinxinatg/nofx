@@ -500,7 +500,8 @@ func fetchOITop() ([]OIPosition, error) {
 	}
 
 	if len(response.Data.Positions) == 0 {
-		return nil, fmt.Errorf("OI Top持仓列表为空")
+		log.Printf("ℹ️ OI Top 持仓列表为空（API返回成功，但当前没有符号）")
+		return []OIPosition{}, nil  // ✅ 正常返回空，不走缓存
 	}
 
 	log.Printf("✓ 成功获取%d个OI Top币种（时间范围: %s）",
