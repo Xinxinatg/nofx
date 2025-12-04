@@ -362,7 +362,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("5. 保证金: 总使用率 ≤ 90%\n")
 	sb.WriteString("6. 开仓金额: 建议 **≥12 USDT** (交易所最小名义价值 10 USDT + 安全边际)\n\n")
 
-	// 3. 输出格式 - 动态生成
+	// 3. 输出格式 - 动态生成（包含限价单字段）
 	sb.WriteString("# 输出格式 (严格遵守)\n\n")
 	sb.WriteString("**必须使用XML标签 <reasoning> 和 <decision> 标签分隔思维链和决策JSON，避免解析错误**\n\n")
 	sb.WriteString("## 格式要求\n\n")
@@ -372,15 +372,33 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("</reasoning>\n\n")
 	sb.WriteString("<decision>\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
+
+	// 示例1：限价开仓单（带 order_type / limit_price）
+	sb.WriteString(fmt.Sprintf(
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"order_type\": \"limit\", \"limit_price\": 96500, \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n",
+		btcEthLeverage, accountEquity*5,
+	))
+
+	// 示例2：动态调整止损
 	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 155, \"reasoning\": \"移动止损至保本位\"},\n")
+
+	// 示例3：平仓
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
+
 	sb.WriteString("]\n```\n")
 	sb.WriteString("</decision>\n\n")
+
 	sb.WriteString("## 字段说明\n\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
 	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- `order_type`: \"limit\" 或 \"market\"。\n")
+	sb.WriteString("  - 如果你打算使用限价单，请显式设置为 \"limit\"。\n")
+	sb.WriteString("  - 如果你打算使用市价单，请设置为 \"market\"，市价单通常不要提供 `limit_price` 字段。\n")
+	sb.WriteString("- `limit_price`: 仅当 `order_type` == \"limit\" 时使用。\n")
+	sb.WriteString("  - 如果你给出具体价格，系统会按该价格挂限价单。\n")
+	sb.WriteString("  - 如果缺失或为 0，系统会自动在当前价格附近（多单略低 / 空单略高，大约±0.5%）生成一个合理的限价价格。\n")
+	sb.WriteString("  - **禁止使用负数价格**。\n")
 	sb.WriteString("- update_stop_loss 时必填: new_stop_loss (注意是 new_stop_loss，不是 stop_loss)\n")
 	sb.WriteString("- update_take_profit 时必填: new_take_profit (注意是 new_take_profit，不是 take_profit)\n")
 	sb.WriteString("- partial_close 时必填: close_percentage (0-100)\n\n")

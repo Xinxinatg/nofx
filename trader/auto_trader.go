@@ -1292,9 +1292,12 @@ func (at *AutoTrader) cleanupPendingOrders() {
 			err := at.trader.CancelLimitOrder(po.Symbol, orderID)
 			if err != nil {
 				if isOrderAlreadyClosedErr(err) {
-					log.Printf("ℹ️ 限价单已不在 open 状态，视为已处理: %s %s orderID=%d, err=%v", ...)
+					log.Printf("ℹ️ 限价单已不在 open 状态，视为已处理: %s %s orderID=%d, err=%v",
+    po.Symbol, po.Side, orderID, err)
 				} else {
-					log.Printf("⚠️ 撤销限价单失败: ...")
+					log.Printf("⚠️ 撤销限价单失败: %s %s orderID=%d, err=%v",
+    po.Symbol, po.Side, orderID, err)
+
 				}
 			}
 			delete(at.pendingOrders, orderID)
