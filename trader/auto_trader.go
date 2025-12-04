@@ -188,7 +188,7 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 
 	// 根据配置创建对应的交易器
 	var trader Trader
-	var err error
+	// var err error
 
 	// 记录仓位模式（通用）
 	marginModeStr := "全仓"

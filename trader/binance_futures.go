@@ -366,6 +366,71 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 	result["status"] = order.Status
 	return result, nil
 }
+// OpenLongLimit 开多仓（限价单）
+func (t *FuturesTrader) OpenLongLimit(symbol string, quantity float64, leverage int, price float64) (map[string]interface{}, error) {
+	// 先取消该币种的所有委托单（清理旧的止损止盈单）
+	if err := t.CancelAllOrders(symbol); err != nil {
+		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
+	}
+
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+
+	// 格式化数量到正确精度
+	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查格式化后的数量是否为 0（防止四舍五入导致的错误）
+	quantityFloat, parseErr := strconv.ParseFloat(quantityStr, 64)
+	if parseErr != nil || quantityFloat <= 0 {
+		return nil, fmt.Errorf("开仓数量过小，格式化后为 0 (原始: %.8f → 格式化: %s)。建议增加开仓金额或选择价格更低的币种", quantity, quantityStr)
+	}
+
+	// 检查最小名义价值（这里用限价 price 来算）
+	priceFloat := price
+	if priceFloat <= 0 {
+		// 防御性：如果 price 异常，退回到市价检查
+		return nil, fmt.Errorf("限价价格非法: %.8f", price)
+	}
+	notional := quantityFloat * priceFloat
+	if notional < t.GetMinNotional(symbol) {
+		return nil, fmt.Errorf(
+			"订单金额 %.2f USDT 低于最小要求 %.2f USDT (数量: %.4f, 限价: %.4f)",
+			notional, t.GetMinNotional(symbol), quantityFloat, priceFloat,
+		)
+	}
+
+	priceStr := fmt.Sprintf("%.8f", priceFloat)
+
+	// 创建限价买入订单（GTC）
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeBuy).
+		PositionSide(futures.PositionSideTypeLong).
+		Type(futures.OrderTypeLimit).
+		TimeInForce(futures.TimeInForceTypeGTC).
+		Quantity(quantityStr).
+		Price(priceStr).
+		NewClientOrderID(getBrOrderID()).
+		Do(context.Background())
+
+	if err != nil {
+		return nil, fmt.Errorf("开多仓限价单失败: %w", err)
+	}
+
+	log.Printf("✓ 开多仓限价单成功: %s 数量: %s 价格: %s", symbol, quantityStr, priceStr)
+	log.Printf("  订单ID: %d", order.OrderID)
+
+	result := make(map[string]interface{})
+	result["orderId"] = order.OrderID
+	result["symbol"]  = order.Symbol
+	result["status"]  = order.Status
+	return result, nil
+}
 
 // OpenShort 开空仓
 func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
@@ -420,6 +485,85 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
 	return result, nil
+}
+// OpenShortLimit 开空仓（限价单）
+func (t *FuturesTrader) OpenShortLimit(symbol string, quantity float64, leverage int, price float64) (map[string]interface{}, error) {
+	// 先取消该币种的所有委托单（清理旧的止损止盈单）
+	if err := t.CancelAllOrders(symbol); err != nil {
+		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
+	}
+
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
+		return nil, err
+	}
+
+	// 格式化数量到正确精度
+	quantityStr, err := t.FormatQuantity(symbol, quantity)
+	if err != nil {
+		return nil, err
+	}
+
+	// 检查格式化后的数量是否为 0（防止四舍五入导致的错误）
+	quantityFloat, parseErr := strconv.ParseFloat(quantityStr, 64)
+	if parseErr != nil || quantityFloat <= 0 {
+		return nil, fmt.Errorf("开仓数量过小，格式化后为 0 (原始: %.8f → 格式化: %s)。建议增加开仓金额或选择价格更低的币种", quantity, quantityStr)
+	}
+
+	// 检查最小名义价值（用限价 price 来算）
+	priceFloat := price
+	if priceFloat <= 0 {
+		return nil, fmt.Errorf("限价价格非法: %.8f", price)
+	}
+	notional := quantityFloat * priceFloat
+	if notional < t.GetMinNotional(symbol) {
+		return nil, fmt.Errorf(
+			"订单金额 %.2f USDT 低于最小要求 %.2f USDT (数量: %.4f, 限价: %.4f)",
+			notional, t.GetMinNotional(symbol), quantityFloat, priceFloat,
+		)
+	}
+
+	priceStr := fmt.Sprintf("%.8f", priceFloat)
+
+	// 创建限价卖出订单（GTC）
+	order, err := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(futures.SideTypeSell).
+		PositionSide(futures.PositionSideTypeShort).
+		Type(futures.OrderTypeLimit).
+		TimeInForce(futures.TimeInForceTypeGTC).
+		Quantity(quantityStr).
+		Price(priceStr).
+		NewClientOrderID(getBrOrderID()).
+		Do(context.Background())
+
+	if err != nil {
+		return nil, fmt.Errorf("开空仓限价单失败: %w", err)
+	}
+
+	log.Printf("✓ 开空仓限价单成功: %s 数量: %s 价格: %s", symbol, quantityStr, priceStr)
+	log.Printf("  订单ID: %d", order.OrderID)
+
+	result := make(map[string]interface{})
+	result["orderId"] = order.OrderID
+	result["symbol"]  = order.Symbol
+	result["status"]  = order.Status
+	return result, nil
+}
+// CancelLimitOrder 撤销指定 orderId 的限价单（或任意普通挂单）
+// 如果订单已经成交/取消，Binance 会返回错误，调用方可以根据错误信息判断是否视为“已处理”
+func (t *FuturesTrader) CancelLimitOrder(symbol string, orderID int64) error {
+	_, err := t.client.NewCancelOrderService().
+		Symbol(symbol).
+		OrderID(orderID).
+		Do(context.Background())
+
+	if err != nil {
+		return fmt.Errorf("撤销限价单失败 (symbol=%s, orderID=%d): %w", symbol, orderID, err)
+	}
+
+	log.Printf("  ✓ 已撤销限价单: %s orderID=%d", symbol, orderID)
+	return nil
 }
 
 // CloseLong 平多仓
