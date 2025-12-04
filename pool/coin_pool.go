@@ -370,18 +370,34 @@ func convertSymbolsToCoins(symbols []string) []CoinInfo {
 
 // ========== OI Top（持仓量增长Top20）数据 ==========
 
-// OIPosition 持仓量数据
+// OIPosition 持仓量数据（支持多周期）
 type OIPosition struct {
-	Symbol            string  `json:"symbol"`
-	Rank              int     `json:"rank"`
-	CurrentOI         float64 `json:"current_oi"`          // 当前持仓量
-	OIDelta           float64 `json:"oi_delta"`            // 持仓量变化
-	OIDeltaPercent    float64 `json:"oi_delta_percent"`    // 持仓量变化百分比
+	Symbol    string  `json:"symbol"`
+	Rank      int     `json:"rank"`
+	CurrentOI float64 `json:"current_oi"` // 当前持仓量
+
+	// 旧字段：总体/默认周期（建议作为 1h 或 API 的主 time_range）
+	OIDelta           float64 `json:"oi_delta"`            // 持仓量变化绝对值
+	OIDeltaPercent    float64 `json:"oi_delta_percent"`    // 持仓量变化百分比（兼容旧结构）
 	OIDeltaValue      float64 `json:"oi_delta_value"`      // 持仓量变化价值
-	PriceDeltaPercent float64 `json:"price_delta_percent"` // 价格变化百分比
-	NetLong           float64 `json:"net_long"`            // 净多仓
-	NetShort          float64 `json:"net_short"`           // 净空仓
+	PriceDeltaPercent float64 `json:"price_delta_percent"` // 价格变化百分比（兼容旧结构）
+
+	// 新增：5m 周期
+	OI5mDeltaPercent     float64 `json:"oi_delta_5m_percent"`
+	Price5mDeltaPercent  float64 `json:"price_delta_5m_percent"`
+
+	// 新增：15m 周期
+	OI15mDeltaPercent    float64 `json:"oi_delta_15m_percent"`
+	Price15mDeltaPercent float64 `json:"price_delta_15m_percent"`
+
+	// 新增：1h 周期（如果你的 API 主 time_range 就是 1h，可以和上面的 OIDeltaPercent / PriceDeltaPercent 一致）
+	OI1hDeltaPercent     float64 `json:"oi_delta_1h_percent"`
+	Price1hDeltaPercent  float64 `json:"price_delta_1h_percent"`
+
+	NetLong  float64 `json:"net_long"`  // 净多仓
+	NetShort float64 `json:"net_short"` // 净空仓
 }
+
 
 // OITopAPIResponse OI Top API返回的数据结构
 type OITopAPIResponse struct {

@@ -61,15 +61,26 @@ type CandidateCoin struct {
 	Sources []string `json:"sources"` // 来源: "ai500" 和/或 "oi_top"
 }
 
-// OITopData 持仓量增长Top数据（用于AI决策参考）
-type OITopData struct {
-	Rank              int     // OI Top排名
-	OIDeltaPercent    float64 // 持仓量变化百分比（1小时）
-	OIDeltaValue      float64 // 持仓量变化价值
-	PriceDeltaPercent float64 // 价格变化百分比
-	NetLong           float64 // 净多仓
-	NetShort          float64 // 净空仓
+// 单个周期的 OI/价格变化
+type OITimeframeDelta struct {
+	OIDeltaPercent    float64 // 该周期的 OI 变化百分比
+	PriceDeltaPercent float64 // 该周期的价格变化百分比
 }
+
+type OITopData struct {
+	Rank int // OI Top排名
+
+	// 多周期数据
+	TF5m  OITimeframeDelta // 5 分钟
+	TF15m OITimeframeDelta // 15 分钟
+	TF1h  OITimeframeDelta // 1 小时
+
+	// 其他汇总信息
+	OIDeltaValue float64 // 总体 OI 变化价值
+	NetLong      float64 // 净多仓
+	NetShort     float64 // 净空仓
+}
+
 
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
@@ -225,18 +236,29 @@ func fetchMarketDataForContext(ctx *Context) error {
 	oiPositions, err := pool.GetOITopPositions()
 	if err == nil {
 		for _, pos := range oiPositions {
-			// 标准化符号匹配
 			symbol := pos.Symbol
 			ctx.OITopDataMap[symbol] = &OITopData{
-				Rank:              pos.Rank,
-				OIDeltaPercent:    pos.OIDeltaPercent,
-				OIDeltaValue:      pos.OIDeltaValue,
-				PriceDeltaPercent: pos.PriceDeltaPercent,
-				NetLong:           pos.NetLong,
-				NetShort:          pos.NetShort,
+				Rank: pos.Rank,
+				TF5m: OITimeframeDelta{
+					OIDeltaPercent:    pos.OI5mDeltaPercent,
+					PriceDeltaPercent: pos.Price5mDeltaPercent,
+				},
+				TF15m: OITimeframeDelta{
+					OIDeltaPercent:    pos.OI15mDeltaPercent,
+					PriceDeltaPercent: pos.Price15mDeltaPercent,
+				},
+				TF1h: OITimeframeDelta{
+					OIDeltaPercent:    pos.OI1hDeltaPercent,
+					PriceDeltaPercent: pos.Price1hDeltaPercent,
+				},
+				OIDeltaValue: pos.OIDeltaValue,
+				NetLong:      pos.NetLong,
+				NetShort:     pos.NetShort,
 			}
 		}
 	}
+
+
 
 	return nil
 }
@@ -419,10 +441,10 @@ func buildUserPrompt(ctx *Context) string {
 	} else {
 		sb.WriteString("当前持仓: 无\n\n")
 	}
-
 	// 候选币种（完整市场数据）
 	sb.WriteString(fmt.Sprintf("## 候选币种 (%d个)\n\n", len(ctx.MarketDataMap)))
 	displayedCount := 0
+
 	for _, coin := range ctx.CandidateCoins {
 		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
 		if !hasData {
@@ -437,18 +459,33 @@ func buildUserPrompt(ctx *Context) string {
 			sourceTags = " (OI_Top持仓增长或者降低信号)"
 		}
 
-		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
-		// ⭐ 在这里加上 OI+价格方向信号
-		oiSignal := describeOISignal(coin.Symbol, ctx)
-		if oiSignal != "" {
-			sb.WriteString(oiSignal)
-			sb.WriteString("\n\n")
+
+		// ⭐ 多周期 OI 信号
+		oiSig5 := describeOISignalTF(coin.Symbol, ctx, "5m")
+		oiSig15 := describeOISignalTF(coin.Symbol, ctx, "15m")
+		oiSig1h := describeOISignalTF(coin.Symbol, ctx, "1h")
+
+		if oiSig5 != "" || oiSig15 != "" || oiSig1h != "" {
+			sb.WriteString("OI多周期信号：\n")
+			if oiSig5 != "" {
+				sb.WriteString("- " + oiSig5 + "\n")
+			}
+			if oiSig15 != "" {
+				sb.WriteString("- " + oiSig15 + "\n")
+			}
+			if oiSig1h != "" {
+				sb.WriteString("- " + oiSig1h + "\n")
+			}
+			sb.WriteString("\n")
 		}
+
+		// 完整市场数据
 		sb.WriteString(market.Format(marketData))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
+
 
 	// 夏普比率（直接传值，不要复杂格式化）
 	if ctx.Performance != nil {
@@ -853,49 +890,63 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 	return nil
 }
-// describeOISignal 根据 OI & 价格变化，给出简单信号标签
+// timeframe: "5m", "15m", "1h"
+func describeOISignalTF(symbol string, ctx *Context, timeframe string) string {
+	oi, ok := ctx.OITopDataMap[symbol]
+	if !ok || oi == nil {
+		return ""
+	}
+
+	var tf OITimeframeDelta
+	switch timeframe {
+	case "5m":
+		tf = oi.TF5m
+	case "15m":
+		tf = oi.TF15m
+	case "1h":
+		tf = oi.TF1h
+	default:
+		tf = oi.TF1h
+	}
+
+	oiDelta := tf.OIDeltaPercent
+	priceDelta := tf.PriceDeltaPercent
+
+	const minAbs = 0.5
+	const eps = 1e-6
+
+	if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
+		return ""
+	}
+
+	// 主趋势信号
+	if oiDelta > minAbs && priceDelta > minAbs {
+		return fmt.Sprintf("【%s OI↑(%.1f%%) & 价↑(%.1f%%) 】", timeframe, oiDelta, priceDelta)
+	}
+	if oiDelta < -minAbs && priceDelta < -minAbs {
+		return fmt.Sprintf("【%s OI↓(%.1f%%) & 价↓(%.1f%%) 】", timeframe, oiDelta, priceDelta)
+	}
+
+	// 反向信号
+	if oiDelta > minAbs && priceDelta < -minAbs {
+		return fmt.Sprintf("【%s OI↑(%.1f%%) & 价↓(%.1f%%) 】", timeframe, oiDelta, priceDelta)
+	}
+	if oiDelta < -minAbs && priceDelta > minAbs {
+		return fmt.Sprintf("【%s OI↓(%.1f%%) & 价↑(%.1f%%) 】", timeframe, oiDelta, priceDelta)
+	}
+
+	// OI 有效变化但价格没动太多
+	if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
+		if oiDelta > 0 {
+			return fmt.Sprintf("【%s OI↑(%.1f%%) & 价横盘 】", timeframe, oiDelta)
+		}
+		return fmt.Sprintf("【%s OI↓(%.1f%%) & 价横盘 】", timeframe, oiDelta)
+	}
+
+	return fmt.Sprintf("【%s 无明显OI+价格信号】", timeframe)
+}
+
+// 兼容旧调用：默认用 1h
 func describeOISignal(symbol string, ctx *Context) string {
-    oi, ok := ctx.OITopDataMap[symbol]
-    if !ok || oi == nil {
-        return "" // 没有 OI Top 数据就不写
-    }
-
-    oiDelta := oi.OIDeltaPercent
-    priceDelta := oi.PriceDeltaPercent
-
-    const minAbs = 0.5   // 有效信号阈值
-    const eps    = 1e-6  // 认为是“0”的容差
-
-    // ⭐ 两边都几乎为 0，说明数据过少/无意义
-    if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
-        return ""
-    }
-
-    // -------- 主趋势信号 --------
-    if oiDelta > minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多 】", oiDelta, priceDelta)
-    }
-    if oiDelta < -minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空 】", oiDelta, priceDelta)
-    }
-
-    // -------- 反向信号 --------
-    if oiDelta > minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹 】", oiDelta, priceDelta)
-    }
-    if oiDelta < -minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
-    }
-
-    // -------- ⭐ 新增逻辑：OI 有效变化，但价格未有效变化 --------
-    if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
-        if oiDelta > 0 {
-            return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象】", oiDelta)
-        } else {
-            return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象】", oiDelta)
-        }
-    }
-
-    // -------- 默认无明显信号 --------
-    return "没有明显的OI+价格信号，谨慎做出交易选择，因为该系统核心依据是持仓量趋势。"
+	return describeOISignalTF(symbol, ctx, "1h")
 }
