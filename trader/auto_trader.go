@@ -201,46 +201,8 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 	case "binance":
 		log.Printf("🏦 [%s] 使用币安合约交易", config.Name)
 		trader = NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
-	case "bybit":
-		log.Printf("🏦 [%s] 使用Bybit合约交易", config.Name)
-		trader = NewBybitTrader(config.BybitAPIKey, config.BybitSecretKey)
-	case "hyperliquid":
-		log.Printf("🏦 [%s] 使用Hyperliquid交易", config.Name)
-		trader, err = NewHyperliquidTrader(config.HyperliquidPrivateKey, config.HyperliquidWalletAddr, config.HyperliquidTestnet)
-		if err != nil {
-			return nil, fmt.Errorf("初始化Hyperliquid交易器失败: %w", err)
-		}
-	case "aster":
-		log.Printf("🏦 [%s] 使用Aster交易", config.Name)
-		trader, err = NewAsterTrader(config.AsterUser, config.AsterSigner, config.AsterPrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("初始化Aster交易器失败: %w", err)
-		}
-	case "lighter":
-		log.Printf("🏦 [%s] 使用LIGHTER交易", config.Name)
-
-		// 優先使用 V2（需要 API Key）
-		if config.LighterAPIKeyPrivateKey != "" {
-			log.Printf("✓ 使用 LIGHTER SDK (V2) - 完整簽名支持")
-			trader, err = NewLighterTraderV2(
-				config.LighterPrivateKey,
-				config.LighterWalletAddr,
-				config.LighterAPIKeyPrivateKey,
-				config.LighterTestnet,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("初始化LIGHTER交易器(V2)失败: %w", err)
-			}
-		} else {
-			// 降級使用 V1（基本HTTP實現）
-			log.Printf("⚠️  使用 LIGHTER 基本實現 (V1) - 功能受限，請配置 API Key")
-			trader, err = NewLighterTrader(config.LighterPrivateKey, config.LighterWalletAddr, config.LighterTestnet)
-			if err != nil {
-				return nil, fmt.Errorf("初始化LIGHTER交易器(V1)失败: %w", err)
-			}
-		}
 	default:
-		return nil, fmt.Errorf("不支持的交易平台: %s", config.Exchange)
+		 return nil, fmt.Errorf("当前版本只支持 Binance 合约交易，请将 exchange 设置为 \"binance\"，当前值: %s", config.Exchange)
 	}
 
 	// 验证初始金额配置
@@ -1771,4 +1733,22 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 
 	posKey := symbol + "_" + side
 	delete(at.peakPnLCache, posKey)
+}
+// isOrderAlreadyClosedErr 判断错误是否属于“订单已成交/已取消/不存在”
+func isOrderAlreadyClosedErr(err error) bool {
+    if err == nil {
+        return false
+    }
+    msg := strings.ToLower(err.Error())
+
+    // 根据各交易所的典型错误消息做一些匹配
+    if strings.Contains(msg, "unknown_order") ||
+        strings.Contains(msg, "order not exist") ||
+        strings.Contains(msg, "order not found") ||
+        strings.Contains(msg, "order is already closed") ||
+        strings.Contains(msg, "cancelled") {
+        return true
+    }
+
+    return false
 }
