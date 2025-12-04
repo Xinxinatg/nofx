@@ -886,5 +886,5 @@ func describeOISignal(symbol string, ctx *Context) string {
     }
 
     // 变化不明显就不说
-    return "没有明显的OI+价格信号，谨慎做出交易选择"
+    return "没有明显的OI+价格信号，谨慎做出交易选择,因为这个交易系统的核心依据是持仓量的变化趋势。"
 }
