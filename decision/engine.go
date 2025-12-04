@@ -866,14 +866,12 @@ func describeOISignal(symbol string, ctx *Context) string {
     const minAbs = 0.6   // 有效信号阈值
     const eps    = 1e-6  // 认为是“0”的容差
 
-    // ⭐ 新增：两边都几乎为 0，视为“数据还不够”，而不是“没有信号”
+    // ⭐ 两边都几乎为 0，说明数据过少/无意义
     if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
-        // 你可以返回空串（不在 prompt 里出现），或者专门说明一下
-        return "" 
-        // 或者：
-        // return "OI数据刚开始收集或样本太少，暂时不使用OI信号。"
+        return ""
     }
 
+    // -------- 主趋势信号 --------
     if oiDelta > minAbs && priceDelta > minAbs {
         return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
     }
@@ -881,14 +879,23 @@ func describeOISignal(symbol string, ctx *Context) string {
         return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
     }
 
+    // -------- 反向信号 --------
     if oiDelta > minAbs && priceDelta < -minAbs {
         return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
     }
-
     if oiDelta < -minAbs && priceDelta > minAbs {
         return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
     }
 
-    // 到这里说明有 delta，但不够“明显”
-    return "没有明显的OI+价格信号，谨慎做出交易选择,因为这个交易系统的核心依据是持仓量的变化趋势。"
+    // -------- ⭐ 新增逻辑：OI 有效变化，但价格未有效变化 --------
+    if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
+        if oiDelta > 0 {
+            return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象】", oiDelta)
+        } else {
+            return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象】", oiDelta)
+        }
+    }
+
+    // -------- 默认无明显信号 --------
+    return "没有明显的OI+价格信号，谨慎做出交易选择，因为该系统核心依据是持仓量趋势。"
 }
