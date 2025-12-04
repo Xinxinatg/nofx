@@ -97,33 +97,33 @@ type Context struct {
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
 }
 
-// Decision AI的交易决策
 type Decision struct {
-	Symbol string `json:"symbol"`
-	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "update_stop_loss", "update_take_profit", "partial_close", "hold", "wait"
+    Symbol string `json:"symbol"`
+    Action string `json:"action"` // "open_long", "open_short", "close_long", ...
 
-	OrderType  string  `json:"order_type,omitempty"`  // "market" / "limit"，默认不填视为"market"
-	LimitPrice float64 `json:"limit_price,omitempty"` // 限价价格（仅当 order_type == "limit" 时生效）
+    // 订单类型与限价价格
+    // order_type: "market" / "limit"
+    // limit_price: 仅在 order_type == "limit" 时生效；如果为 0，AutoTrader 会按当前价 ±0.5% 自动填充
+    OrderType  string  `json:"order_type,omitempty"`
+    LimitPrice float64 `json:"limit_price,omitempty"`
 
-	// 开仓参数
-	Leverage        int     `json:"leverage,omitempty"`
-	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
-	StopLoss        float64 `json:"stop_loss,omitempty"`
-	TakeProfit      float64 `json:"take_profit,omitempty"`
+    // 开仓参数
+    Leverage        int     `json:"leverage,omitempty"`
+    PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
+    StopLoss        float64 `json:"stop_loss,omitempty"`
+    TakeProfit      float64 `json:"take_profit,omitempty"`
 
-	    // ✅ 新增：订单类型与限价价格
-    OrderType  string  `json:"order_type,omitempty"`  // "market" / "limit"
-    LimitPrice float64 `json:"limit_price,omitempty"` // 限价价格
-	// 调整参数（新增）
-	NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
-	NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit
-	ClosePercentage float64 `json:"close_percentage,omitempty"` // 用于 partial_close (0-100)
+    // 调整参数
+    NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
+    NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit
+    ClosePercentage float64 `json:"close_percentage,omitempty"` // 用于 partial_close (0-100)
 
-	// 通用参数
-	Confidence int     `json:"confidence,omitempty"` // 信心度 (0-100)
-	RiskUSD    float64 `json:"risk_usd,omitempty"`   // 最大美元风险
-	Reasoning  string  `json:"reasoning"`
+    // 通用参数
+    Confidence int     `json:"confidence,omitempty"` // 信心度 (0-100)
+    RiskUSD    float64 `json:"risk_usd,omitempty"`   // 最大美元风险
+    Reasoning  string  `json:"reasoning"`
 }
+
 
 // FullDecision AI的完整决策（包含思维链）
 type FullDecision struct {
