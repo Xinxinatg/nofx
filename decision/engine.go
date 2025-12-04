@@ -873,26 +873,26 @@ func describeOISignal(symbol string, ctx *Context) string {
 
     // -------- 主趋势信号 --------
     if oiDelta > minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
+        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多 但是注意这是滞后15分钟信号】", oiDelta, priceDelta)
     }
     if oiDelta < -minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
+        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空 但是注意这是滞后15分钟信号】", oiDelta, priceDelta)
     }
 
     // -------- 反向信号 --------
     if oiDelta > minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
+        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹 但是注意这是滞后15分钟信号】", oiDelta, priceDelta)
     }
     if oiDelta < -minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
+        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓 但是注意这是滞后15分钟信号】", oiDelta, priceDelta)
     }
 
     // -------- ⭐ 新增逻辑：OI 有效变化，但价格未有效变化 --------
     if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
         if oiDelta > 0 {
-            return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象】", oiDelta)
+            return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象 但是注意这是滞后15分钟信号】", oiDelta)
         } else {
-            return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象】", oiDelta)
+            return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象 但是注意这是滞后15分钟信号】", oiDelta)
         }
     }
 
