@@ -251,24 +251,13 @@ func (tm *TraderManager) addTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 根据交易所类型设置API密钥
-	if exchangeCfg.ID == "binance" {
-		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
-		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "bybit" {
-		traderConfig.BybitAPIKey = exchangeCfg.APIKey
-		traderConfig.BybitSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "hyperliquid" {
-		traderConfig.HyperliquidPrivateKey = exchangeCfg.APIKey // hyperliquid用APIKey存储private key
-		traderConfig.HyperliquidWalletAddr = exchangeCfg.HyperliquidWalletAddr
-	} else if exchangeCfg.ID == "aster" {
-		traderConfig.AsterUser = exchangeCfg.AsterUser
-		traderConfig.AsterSigner = exchangeCfg.AsterSigner
-		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
-	} else if exchangeCfg.ID == "lighter" {
-		traderConfig.LighterPrivateKey = exchangeCfg.LighterPrivateKey
-		traderConfig.LighterWalletAddr = exchangeCfg.LighterWalletAddr
-		traderConfig.LighterTestnet = exchangeCfg.Testnet
+	// 只支持 Binance
+	if exchangeCfg.ID != "binance" {
+		return fmt.Errorf("当前版本只支持 Binance，交易所 %s 无效", exchangeCfg.ID)
 	}
+
+	traderConfig.BinanceAPIKey = exchangeCfg.APIKey
+	traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
 
 	// 根据AI模型设置API密钥
 	if aiModelCfg.Provider == "qwen" {
@@ -364,24 +353,14 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 	}
 
 	// 根据交易所类型设置API密钥
-	if exchangeCfg.ID == "binance" {
-		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
-		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "bybit" {
-		traderConfig.BybitAPIKey = exchangeCfg.APIKey
-		traderConfig.BybitSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "hyperliquid" {
-		traderConfig.HyperliquidPrivateKey = exchangeCfg.APIKey // hyperliquid用APIKey存储private key
-		traderConfig.HyperliquidWalletAddr = exchangeCfg.HyperliquidWalletAddr
-	} else if exchangeCfg.ID == "aster" {
-		traderConfig.AsterUser = exchangeCfg.AsterUser
-		traderConfig.AsterSigner = exchangeCfg.AsterSigner
-		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
-	} else if exchangeCfg.ID == "lighter" {
-		traderConfig.LighterPrivateKey = exchangeCfg.LighterPrivateKey
-		traderConfig.LighterWalletAddr = exchangeCfg.LighterWalletAddr
-		traderConfig.LighterTestnet = exchangeCfg.Testnet
+	// 只支持 Binance
+	if exchangeCfg.ID != "binance" {
+		return fmt.Errorf("当前版本只支持 Binance，交易所 %s 无效", exchangeCfg.ID)
 	}
+
+	traderConfig.BinanceAPIKey = exchangeCfg.APIKey
+	traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
+
 
 	// 根据AI模型设置API密钥
 	if aiModelCfg.Provider == "qwen" {
@@ -1088,24 +1067,14 @@ func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiMode
 	}
 
 	// 根据交易所类型设置API密钥
-	if exchangeCfg.ID == "binance" {
-		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
-		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "bybit" {
-		traderConfig.BybitAPIKey = exchangeCfg.APIKey
-		traderConfig.BybitSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "hyperliquid" {
-		traderConfig.HyperliquidPrivateKey = exchangeCfg.APIKey // hyperliquid用APIKey存储private key
-		traderConfig.HyperliquidWalletAddr = exchangeCfg.HyperliquidWalletAddr
-	} else if exchangeCfg.ID == "aster" {
-		traderConfig.AsterUser = exchangeCfg.AsterUser
-		traderConfig.AsterSigner = exchangeCfg.AsterSigner
-		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
-	} else if exchangeCfg.ID == "lighter" {
-		traderConfig.LighterPrivateKey = exchangeCfg.LighterPrivateKey
-		traderConfig.LighterWalletAddr = exchangeCfg.LighterWalletAddr
-		traderConfig.LighterTestnet = exchangeCfg.Testnet
+	// 只支持 Binance
+	if exchangeCfg.ID != "binance" {
+		return fmt.Errorf("当前版本只支持 Binance，交易所 %s 无效", exchangeCfg.ID)
 	}
+
+	traderConfig.BinanceAPIKey = exchangeCfg.APIKey
+	traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
+
 
 	// 根据AI模型设置API密钥
 	if aiModelCfg.Provider == "qwen" {
