@@ -1,5 +1,5 @@
 package decision
-
+import "math"
 import (
 	"encoding/json"
 	"fmt"
@@ -863,28 +863,33 @@ func describeOISignal(symbol string, ctx *Context) string {
 
     oiDelta := oi.OIDeltaPercent
     priceDelta := oi.PriceDeltaPercent
-	log.Printf("OI信号: %s oiDelta=%.4f priceDelta=%.4f", symbol, oiDelta, priceDelta)
-    // 你可以根据自己习惯调这个“明显”的阈值
-    const minAbs = 0.6 // 0.5% 以内就当成噪音，不强行打标签
 
-    // OI 和价格都在涨 → 倾向做多
+    const minAbs = 0.6   // 有效信号阈值
+    const eps    = 1e-6  // 认为是“0”的容差
+
+    // ⭐ 新增：两边都几乎为 0，视为“数据还不够”，而不是“没有信号”
+    if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
+        // 你可以返回空串（不在 prompt 里出现），或者专门说明一下
+        return "" 
+        // 或者：
+        // return "OI数据刚开始收集或样本太少，暂时不使用OI信号。"
+    }
+
     if oiDelta > minAbs && priceDelta > minAbs {
         return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多】", oiDelta, priceDelta)
     }
-
-    // OI 和价格都在跌 → 倾向做空
     if oiDelta < -minAbs && priceDelta < -minAbs {
         return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空】", oiDelta, priceDelta)
     }
 
-    // 其它组合你也可以顺便提示一下
     if oiDelta > minAbs && priceDelta < -minAbs {
         return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹】", oiDelta, priceDelta)
     }
+
     if oiDelta < -minAbs && priceDelta > minAbs {
         return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
     }
 
-    // 变化不明显就不说
+    // 到这里说明有 delta，但不够“明显”
     return "没有明显的OI+价格信号，谨慎做出交易选择,因为这个交易系统的核心依据是持仓量的变化趋势。"
 }
