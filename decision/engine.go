@@ -863,7 +863,7 @@ func describeOISignal(symbol string, ctx *Context) string {
 
     oiDelta := oi.OIDeltaPercent
     priceDelta := oi.PriceDeltaPercent
-
+	log.Printf("OI信号: %s oiDelta=%.4f priceDelta=%.4f", symbol, oiDelta, priceDelta)
     // 你可以根据自己习惯调这个“明显”的阈值
     const minAbs = 0.6 // 0.5% 以内就当成噪音，不强行打标签
 
