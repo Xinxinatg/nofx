@@ -863,7 +863,7 @@ func describeOISignal(symbol string, ctx *Context) string {
     oiDelta := oi.OIDeltaPercent
     priceDelta := oi.PriceDeltaPercent
 
-    const minAbs = 0.6   // 有效信号阈值
+    const minAbs = 0.5   // 有效信号阈值
     const eps    = 1e-6  // 认为是“0”的容差
 
     // ⭐ 两边都几乎为 0，说明数据过少/无意义
