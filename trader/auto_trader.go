@@ -1461,7 +1461,6 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 	return sorted
 }
 
-// getCandidateCoins 获取交易员的候选币种列表（支持 自定义 + AI500 + OI_TOP 三方合并）
 // getCandidateCoins 获取交易员的候选币种列表（只用 AI500 + OI_TOP，不再 fallback 自定义/默认币）
 func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
     var candidateCoins []decision.CandidateCoin
@@ -1472,6 +1471,7 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
     mergedPool, err := pool.GetMergedCoinPool(ai500Limit)
     if err != nil {
         log.Printf("⚠️ [%s] 获取合并币池失败: %v", at.name, err)
+        // 这里不直接 return error，让系统还能依赖已有持仓工作
     }
 
     if err == nil && mergedPool != nil && len(mergedPool.AllSymbols) > 0 {
@@ -1482,19 +1482,19 @@ func (at *AutoTrader) getCandidateCoins() ([]decision.CandidateCoin, error) {
             seen[symbol] = true
             candidateCoins = append(candidateCoins, decision.CandidateCoin{
                 Symbol:  symbol,
-                Sources: mergedPool.SymbolSources[symbol], // 大部分情况就是 ["oi_top"]
+                Sources: mergedPool.SymbolSources[symbol], // ai500 / oi_top / both
             })
         }
         log.Printf("📋 [%s] 合并币池: AI500前%d + OI_TOP%d → %d个候选币",
             at.name, ai500Limit, len(mergedPool.OITopCoins), len(candidateCoins))
     }
 
-    // ❌ ② 不再在 AI500/OI_TOP 为空时自动塞 tradingCoins / defaultCoins
-    //    如果你以后想加一个“手动开关”，可以再加个 config.EnableFallbackCoins 判断
+    // ❗不再 fallback 到 tradingCoins / defaultCoins
 
-    // ② 最终检查：如果一个都没有，就报错 → 本轮不交易
+    // ✅ 关键：候选币为空时，也正常返回，不报错
     if len(candidateCoins) == 0 {
-        return nil, fmt.Errorf("候选币种为空：当前没有任何 AI500/OI_TOP 信号，本轮不进行交易")
+        log.Printf("ℹ️ [%s] 当前没有任何 AI500/OI_TOP 候选币，本轮只针对已有持仓做管理/风控，不开新仓", at.name)
+        return []decision.CandidateCoin{}, nil
     }
 
     return candidateCoins, nil
