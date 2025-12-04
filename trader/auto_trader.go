@@ -118,6 +118,15 @@ type AutoTrader struct {
 	lastBalanceSyncTime   time.Time          // 上次余额同步时间
 	database              interface{}        // 数据库引用（用于自动更新余额）
 	userID                string             // 用户ID
+	pendingOrders   map[int64]PendingOrder // orderId -> 挂单信息
+    pendingOrdersMu sync.Mutex            // 并发保护
+}
+// PendingOrder 表示由 AutoTrader 创建、需要自动管理生命周期的限价单
+type PendingOrder struct {
+    Symbol       string    // 交易对，如 BTCUSDT
+    Side         string    // "long" / "short"
+    OrderID      int64     // 下单返回的订单 ID
+    CreatedCycle int       // 是在第几个决策周期创建的
 }
 
 // NewAutoTrader 创建自动交易器
@@ -275,6 +284,8 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		lastBalanceSyncTime:   time.Now(), // 初始化为当前时间
 		database:              database,
 		userID:                userID,
+		pendingOrders:         make(map[int64]PendingOrder),
+		pendingOrdersMu:       sync.Mutex{},
 	}, nil
 }
 
@@ -331,7 +342,7 @@ func (at *AutoTrader) Stop() {
 // runCycle 运行一个交易周期（使用AI全权决策）
 func (at *AutoTrader) runCycle() error {
 	at.callCount++
-
+    at.cleanupPendingOrders()
 	log.Print("\n" + strings.Repeat("=", 70) + "\n")
 	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
 	log.Println(strings.Repeat("=", 70))
@@ -719,7 +730,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		return err
 	}
 
-	// 计算数量
 	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = marketData.CurrentPrice
@@ -748,37 +758,67 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
 		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
-		// 继续执行，不影响交易
 	}
 
-	// 开仓
-	order, err := at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
-	if err != nil {
-		return err
+	// === 关键：根据 OrderType 决定用市价还是限价 ===
+	var order map[string]interface{}
+
+	orderType := strings.ToLower(strings.TrimSpace(decision.OrderType))
+	if orderType == "" {
+		orderType = "limit" // 默认限价单
+	}
+	// 把归一化后的结果回写，后面用 decision.OrderType 就是干净值了
+	decision.OrderType = orderType
+
+	if orderType == "limit" {
+		// 如果 AI 没给有效价格，自动用 当前价下方 0.5%
+		limitPrice := decision.LimitPrice
+		if limitPrice <= 0 {
+			limitPrice = marketData.CurrentPrice * 0.995 // -0.5%
+			decision.LimitPrice = limitPrice
+			log.Printf("  💡 未提供有效限价，自动设置开多限价为当前价下方0.5%%: %.4f (当前价: %.4f)",
+				limitPrice, marketData.CurrentPrice)
+		} else {
+			log.Printf("  📌 使用AI提供的限价开多: %s 价格=%.4f (当前价: %.4f)",
+				decision.Symbol, limitPrice, marketData.CurrentPrice)
+		}
+
+		order, err = at.trader.OpenLongLimit(decision.Symbol, quantity, decision.Leverage, limitPrice)
+		if err != nil {
+			return err
+		}
+
+	} else { // market
+		log.Printf("  ⚡ 使用市价单开多: %s (当前价: %.4f)", decision.Symbol, marketData.CurrentPrice)
+		order, err = at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 记录订单ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+
+		// 如果是限价单，则登记到挂单缓存
+		if decision.OrderType == "limit" && decision.LimitPrice > 0 {
+			at.pendingOrdersMu.Lock()
+			at.pendingOrders[orderID] = PendingOrder{
+				Symbol:       decision.Symbol,
+				Side:         "long",
+				OrderID:      orderID,
+				CreatedCycle: at.callCount, // 当前周期
+			}
+			at.pendingOrdersMu.Unlock()
+
+			log.Printf("  🧾 已登记限价多单到挂单缓存: %s long orderID=%d, 周期=%d",
+				decision.Symbol, orderID, at.callCount)
+		}
 	}
 
-	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
-
-	// 记录开仓时间
-	posKey := decision.Symbol + "_long"
-	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
-
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		log.Printf("  ⚠ 设置止盈失败: %v", err)
-	}
-
+	log.Printf("  ✓ 开仓提交成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 	return nil
 }
-
 // executeOpenShortWithRecord 执行开空仓并记录详细信息
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  📉 开空仓: %s", decision.Symbol)
@@ -828,34 +868,61 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	// 设置仓位模式
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
 		log.Printf("  ⚠️ 设置仓位模式失败: %v", err)
-		// 继续执行，不影响交易
 	}
 
-	// 开仓
-	order, err := at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
-	if err != nil {
-		return err
+	var order map[string]interface{}
+
+	orderType := strings.ToLower(strings.TrimSpace(decision.OrderType))
+	if orderType == "" {
+		orderType = "limit" // 默认限价单
+	}
+	decision.OrderType = orderType
+
+	if orderType == "limit" {
+		// 如果 AI 没给有效价格，自动用 当前价上方 0.5%
+		limitPrice := decision.LimitPrice
+		if limitPrice <= 0 {
+			limitPrice = marketData.CurrentPrice * 1.005 // +0.5%
+			decision.LimitPrice = limitPrice
+			log.Printf("  💡 未提供有效限价，自动设置开空限价为当前价上方0.5%%: %.4f (当前价: %.4f)",
+				limitPrice, marketData.CurrentPrice)
+		} else {
+			log.Printf("  📌 使用AI提供的限价开空: %s 价格=%.4f (当前价: %.4f)",
+				decision.Symbol, limitPrice, marketData.CurrentPrice)
+		}
+
+		order, err = at.trader.OpenShortLimit(decision.Symbol, quantity, decision.Leverage, limitPrice)
+		if err != nil {
+			return err
+		}
+
+	} else { // market
+		log.Printf("  ⚡ 使用市价单开空: %s (当前价: %.4f)", decision.Symbol, marketData.CurrentPrice)
+		order, err = at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
+		if err != nil {
+			return err
+		}
 	}
 
-	// 记录订单ID
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+
+		if decision.OrderType == "limit" && decision.LimitPrice > 0 {
+			at.pendingOrdersMu.Lock()
+			at.pendingOrders[orderID] = PendingOrder{
+				Symbol:       decision.Symbol,
+				Side:         "short",
+				OrderID:      orderID,
+				CreatedCycle: at.callCount,
+			}
+			at.pendingOrdersMu.Unlock()
+
+			log.Printf("  🧾 已登记限价空单到挂单缓存: %s short orderID=%d, 周期=%d",
+				decision.Symbol, orderID, at.callCount)
+		}
 	}
 
-	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
-
-	// 记录开仓时间
-	posKey := decision.Symbol + "_short"
-	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
-
-	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		log.Printf("  ⚠ 设置止损失败: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		log.Printf("  ⚠ 设置止盈失败: %v", err)
-	}
-
+	log.Printf("  ✓ 开仓提交成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 	return nil
 }
 
@@ -1204,6 +1271,36 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	}
 
 	return nil
+}
+// cleanupPendingOrders 在每个新周期开始时调用：
+// 把“上一个周期创建的限价单”全部撤掉。
+func (at *AutoTrader) cleanupPendingOrders() {
+    at.pendingOrdersMu.Lock()
+    defer at.pendingOrdersMu.Unlock()
+
+    if len(at.pendingOrders) == 0 {
+        return
+    }
+
+    currentCycle := at.callCount
+    for orderID, po := range at.pendingOrders {
+        // 只清理“上一个周期及更早”的挂单
+        if po.CreatedCycle <= currentCycle-1 {
+            log.Printf("🧹 清理未触发的限价单: %s %s orderID=%d (创建于周期 #%d, 当前周期 #%d)",
+                po.Symbol, po.Side, orderID, po.CreatedCycle, currentCycle)
+
+			err := at.trader.CancelLimitOrder(po.Symbol, orderID)
+			if err != nil {
+				if isOrderAlreadyClosedErr(err) {
+					log.Printf("ℹ️ 限价单已不在 open 状态，视为已处理: %s %s orderID=%d, err=%v", ...)
+				} else {
+					log.Printf("⚠️ 撤销限价单失败: ...")
+				}
+			}
+			delete(at.pendingOrders, orderID)
+
+        }
+    }
 }
 
 // GetID 获取trader ID

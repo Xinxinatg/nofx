@@ -15,6 +15,9 @@ type Trader interface {
 	// OpenShort 开空仓
 	OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error)
 
+	OpenLongLimit(symbol string, quantity float64, leverage int, price float64) (map[string]interface{}, error)
+    OpenShortLimit(symbol string, quantity float64, leverage int, price float64) (map[string]interface{}, error)
+
 	// CloseLong 平多仓（quantity=0表示全部平仓）
 	CloseLong(symbol string, quantity float64) (map[string]interface{}, error)
 
