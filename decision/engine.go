@@ -465,8 +465,8 @@ func buildUserPrompt(ctx *Context) string {
 	}
 
 	sb.WriteString("---\n\n")
-	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
-	// sb.WriteString("请根据数据给出最终决策，展示思维链条，只输出JSON格式的决策列表\n")
+	// sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
+	sb.WriteString("请根据数据给出最终决策，禁止展示思维链条，只输出JSON格式的决策列表\n")
 
 	return sb.String()
 }
@@ -860,42 +860,43 @@ func describeOISignal(symbol string, ctx *Context) string {
         return "" // 没有 OI Top 数据就不写
     }
 
-    oiDelta := oi.OIDeltaPercent
-    priceDelta := oi.PriceDeltaPercent
+    // oiDelta := oi.OIDeltaPercent
+    // priceDelta := oi.PriceDeltaPercent
 
-    const minAbs = 0.5   // 有效信号阈值
-    const eps    = 1e-6  // 认为是“0”的容差
+    // const minAbs = 0.5   // 有效信号阈值
+    // const eps    = 1e-6  // 认为是“0”的容差
 
-    // ⭐ 两边都几乎为 0，说明数据过少/无意义
-    if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
-        return ""
-    }
+    // // ⭐ 两边都几乎为 0，说明数据过少/无意义
+    // if math.Abs(oiDelta) < eps && math.Abs(priceDelta) < eps {
+    //     return ""
+    // }
 
-    // -------- 主趋势信号 --------
-    if oiDelta > minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多 】", oiDelta, priceDelta)
-    }
-    if oiDelta < -minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空 】", oiDelta, priceDelta)
-    }
+    // // -------- 主趋势信号 --------
+    // if oiDelta > minAbs && priceDelta > minAbs {
+    //     return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↑(%.1f%%) → 倾向做多 】", oiDelta, priceDelta)
+    // }
+    // if oiDelta < -minAbs && priceDelta < -minAbs {
+    //     return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↓(%.1f%%) → 倾向做空 】", oiDelta, priceDelta)
+    // }
 
-    // -------- 反向信号 --------
-    if oiDelta > minAbs && priceDelta < -minAbs {
-        return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹 】", oiDelta, priceDelta)
-    }
-    if oiDelta < -minAbs && priceDelta > minAbs {
-        return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
-    }
+    // // -------- 反向信号 --------
+    // if oiDelta > minAbs && priceDelta < -minAbs {
+    //     return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价↓(%.1f%%) → 警惕诱空/吸筹 】", oiDelta, priceDelta)
+    // }
+    // if oiDelta < -minAbs && priceDelta > minAbs {
+    //     return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价↑(%.1f%%) → 警惕逼空/多头减仓】", oiDelta, priceDelta)
+    // }
 
-    // -------- ⭐ 新增逻辑：OI 有效变化，但价格未有效变化 --------
-    if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
-        if oiDelta > 0 {
-            return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象】", oiDelta)
-        } else {
-            return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象】", oiDelta)
-        }
-    }
+    // // -------- ⭐ 新增逻辑：OI 有效变化，但价格未有效变化 --------
+    // if math.Abs(oiDelta) > minAbs && math.Abs(priceDelta) <= minAbs {
+    //     if oiDelta > 0 {
+    //         return fmt.Sprintf("【信号: OI↑(%.1f%%) & 价无明显变动 → 吸筹迹象】", oiDelta)
+    //     } else {
+    //         return fmt.Sprintf("【信号: OI↓(%.1f%%) & 价无明显变动 → 派发/减仓迹象】", oiDelta)
+    //     }
+    // }
 
-    // -------- 默认无明显信号 --------
-    return "没有明显的OI+价格信号，谨慎做出交易选择，因为该系统核心依据是持仓量趋势。"
+    // // -------- 默认无明显信号 --------
+    // return "没有明显的OI+价格信号，谨慎做出交易选择，因为该系统核心依据是持仓量趋势。"
+	return ""
 }
